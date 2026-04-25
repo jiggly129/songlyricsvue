@@ -7,8 +7,6 @@ import 'vue-select/dist/vue-select.css';
 import playImg from '@/assets/play.png'
 import pauseImg from '@/assets/pause.png'
 import { useMagicKeys } from '@vueuse/core'
-import { watch } from 'vue';
-import config from '../../public/config.json'
  
 let lyrics
 let player
@@ -21,6 +19,13 @@ let songName = ''
 let checkInterval
 let roundedPlayerTime
 let rounedPlayerFullTime
+let timeSliderInterval
+let duration
+let loop = false
+let clickableHover = false
+let shuffle = false
+let playedSongs = []
+let currAbsoluteIndex = 0
 const artist = ref('')
 const song = ref('')
 const currentLyricsVal = ref('')
@@ -33,15 +38,24 @@ const playlistUrl = ref('')
 const playlistSongs = ref([])
 const selectedInput = ref('Single')
 const visibleOptions = ref({single: true, playlist: false})
-const playlistVisible = ref(true)
+const playlistVisible = ref(false)
 const songData = ref(null)
 const coverSrc = ref('')
 const currArtist = ref('')
 const currSong = ref('')
 const songStateImg = ref('songStateImg')
-const songTimeSlider = ref('songTimeSlider')
-const songTimeSliderClass = ref('')
+const currentTimeSlider = ref('currentTimeSlider')
 const songTime = ref('')
+const playlistVisibleImg = ref('playlistVisibleImg')
+const loopImg = ref('loopImg')
+const shuffleImg = ref('shuffleImg')
+const playlistSongsParent = ref('playlistSongsParent')
+const currentVolume = ref(50)
+const volumeSliderOpacity = ref(0)
+const timeBarIndicatorStyles = ref({left: 0, opacity: 0})
+const timeBarClass = ref('')
+const inputsVisibleImg = ref('inputsVisibleImg')
+const inputsVisible = ref(true)
 
 const {space} = useMagicKeys()
 
@@ -62,24 +76,39 @@ function loadYouTubeAPI() {
   })
 }
 
-const updateApiUrl = () => {
-  apiUrl = ''
-
-  artists.forEach((artist) => apiUrl += ` ${artist}`)
-  words.forEach((word) => apiUrl += ` ${word}`)
-
-  apiUrl = encode(apiUrl)
+const togglePlaylistVisible = () => {
+  if (playlistVisible.value === false && playlistSongs.value.length !== 0) {
+    playlistVisible.value = true
+    playlistVisibleImg.value.classList.toggle('active')
+    return setTimeout(() => {
+      playlistSongsParent.value.children[currIndex].scrollIntoView({behavior: 'instant', block: 'center'})
+    }, 50)
+  }
+  playlistVisible.value = false
+  playlistVisibleImg.value.classList.remove('active')
 }
 
-watch(space, (v) => {
-  if (v) { updateSongState('state') }
-})
-
-const updatePlaylist = () => {
-  if (playlistVisible.value === true) {
-    return playlistVisible.value = false
+const toggleInputsVisible = () => {
+  if (inputsVisible.value === false) {
+    inputsVisible.value = true
+    return inputsVisibleImg.value.classList.toggle('active')
   }
-  playlistVisible.value = true
+  inputsVisible.value = false
+  inputsVisibleImg.value.classList.remove('active')
+} 
+
+const updateApiUrl = () => {
+  apiUrl = ''
+  
+  try {
+    artists = artists.replace(/[\(\[][^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi, '').match((/(\b[^\s]+\b)/g))
+    words = words.replace(/[\(\[][^\)\]]*[\)\]]/g, '').match((/(\b[^\s]+\b)/g))
+
+    artists.forEach((artist) => apiUrl += ` ${artist}`)
+    words.forEach((word) => apiUrl += ` ${word}`)
+
+    apiUrl = encode(apiUrl)
+  } catch (e) {console.log(e)}
 }
 
 const updateInputs = () => {
@@ -106,7 +135,9 @@ const updatePlayer = async (id) => {
     events: {
       onReady: () => {
         player.playVideo()
+        player.setVolume(currentVolume.value * 2)
         songStateImg.value.setAttribute('src', pauseImg)
+        timeBarIndicatorStyles.value.left = `0%`
       }
     }
   })
@@ -115,26 +146,87 @@ const updatePlayer = async (id) => {
   coverSrc.value = `https://img.youtube.com/vi/${id}/maxresdefault.jpg`
 }
 
-const playPlaylistSong = async (i) => {
+const setImgAttribute = (type, img) => {
+  if (type === 'play') {
+    return img.setAttribute('src', playImg)
+  }
+  img.setAttribute('src', pauseImg)
+}
+
+const playPlaylistSong = async (i, el) => {
+  if (i === currIndex) {
+    if (player.getPlayerState() === 2) {
+      player.playVideo()
+      setImgAttribute('pause', songStateImg.value)
+      return setImgAttribute('pause', el)
+    }
+    player.pauseVideo()
+    setImgAttribute('play', songStateImg.value)
+    return setImgAttribute('play', el)
+  } 
+
+  if (playedSongs.length !== 0) {
+    let found = false
+    playedSongs.forEach((songIndex, index) => {
+      if (songIndex === i) {
+        found = true
+      } else if (index === playedSongs.length - 1 && found === false) {
+        playedSongs.push(i)
+        // playlistSongsParent.value.children[playedSongs[playedSongs.length - 2]].classList.remove('active')
+        setImgAttribute('play', playlistSongsParent.value.children[playedSongs[playedSongs.length - 2]].children[2])
+      }
+    })
+  } else {
+    playedSongs.push(i)
+  }
+  
+  try {
+    playlistSongsParent.value.children[currIndex].classList.remove('active')
+  } catch (e) {console.log(e)}
+
   artists = []
   words = []
 
   currIndex = i
 
-  await updatePlayer(await playlistSongs.value[i].url.split('=')[1])
+  await updatePlayer(await playlistSongs.value[i].url)
 
-  words = playlistSongs.value[i].title.match((/(\b[^\s]+\b)/g))
-  artists = playlistSongs.value[i].author.match((/(\b[^\s]+\b)/g))
+  words = playlistSongs.value[i].title
+  artists = playlistSongs.value[i].author
   
   updateApiUrl()
   
-  playlistVisible.value = false
   await updateLyrics()
+  
+  setImgAttribute('pause', playlistSongsParent.value.children[i].children[2])
+  playlistSongsParent.value.children[i].classList.toggle('active')
+  playlistSongsParent.value.children[i].scrollIntoView({behavior: 'smooth', block: 'center'})
 }
 
-const playlistAction = (i) => {
+const playlistAction = (state, i) => {
   clearInterval(checkInterval)
-  playPlaylistSong(i)
+  clearInterval(timeSliderInterval)
+
+  if (state === 'previous' && playedSongs.length > 1) {
+    currAbsoluteIndex -= 1
+    return playPlaylistSong(playedSongs[(playedSongs.length - 1) + currAbsoluteIndex])
+  } else if (state === 'next' && currAbsoluteIndex < 0) {
+    currAbsoluteIndex += 1
+    return playPlaylistSong(playedSongs[(playedSongs.length - 1) + currAbsoluteIndex])
+  } else if (state === 'remove') {
+    if (currIndex !== i) {return playlistSongs.value.splice(i, 1)}
+  }
+  
+  if (shuffle === true) {
+    return playPlaylistSong(Math.floor(Math.random() * playlistSongs.value.length))
+  }
+
+  if (playlistSongs.value[i] !== undefined && state !== 'remove') { playPlaylistSong(i) }
+}
+
+const animateTimeSlider = () => {
+  currentTimeSlider.value.classList.toggle('fade')
+  currentTimeSlider.value.addEventListener('animationend', (e) => currentTimeSlider.value.classList.remove('fade'))
 }
 
 const updateSongState = (type, e) => {  
@@ -142,24 +234,44 @@ const updateSongState = (type, e) => {
     case 'state': {
       if (player.getPlayerState() === 2) {
         player.playVideo()
+        setImgAttribute('pause', playlistSongsParent.value.children[currIndex].children[2])
         return songStateImg.value.setAttribute('src', pauseImg)
       }
       player.pauseVideo()
+      setImgAttribute('play', playlistSongsParent.value.children[currIndex].children[2])
       songStateImg.value.setAttribute('src', playImg)
       break
-    } case 'previous': {
-      playlistAction(currIndex - 1)
-      break
-    } case 'next': {
-      playlistAction(currIndex + 1)
-      break
     } case 'duration': {
-      const percentileDuration = (e.clientX / window.innerWidth)
-      player.seekTo(Math.round(player.getDuration()) * percentileDuration)
-      songTimeSlider.value.style.left = `${percentileDuration * 100}%`
-      songTimeSliderClass.value = 'fade'
+        const percentileDuration = (e.clientX / window.innerWidth)
+        player.seekTo(Math.round(player.getDuration()) * percentileDuration)
+        animateTimeSlider()
 
-      songTimeSlider.value.addEventListener('animationend', (e) => songTimeSliderClass.value = '')
+        timeBarIndicatorStyles.value.left = `${(e.clientX / window.innerWidth) * 100}%`
+        timeBarIndicatorStyles.value.opacity = 1
+
+        setTimeout(() => timeBarIndicatorStyles.value.opacity = 0 , 1000)
+      break
+    } case 'loop': {
+      if (loop === false) {
+        loop = true
+        return loopImg.value.classList.toggle('active')
+      }
+      loop = false
+      loopImg.value.classList.remove('active')
+      break
+    } case 'shuffle': {
+      if (shuffle === false) {
+        shuffle = true
+        return shuffleImg.value.classList.toggle('active')
+      }
+      shuffle = false
+      shuffleImg.value.classList.remove('active')
+      break
+    } case 'volume': {
+      if (volumeSliderOpacity.value !== 0) {
+        player.setVolume(currentVolume.value * 2)
+      }
+      break
     }
   } 
 }
@@ -168,11 +280,13 @@ const updateArrays = () => {
   artistName = ''
   songName = ''
 
-  artists.forEach((artist) => artistName += ` ${artist}`)
-  words.forEach((word) => songName += ` ${word}`)
+  try {
+    artists.forEach((artist) => artistName += ` ${artist}`)
+    words.forEach((word) => songName += ` ${word}`)
+  } catch (e) {console.log(e)}
 }
 
-const updateLyrics = async () => {
+const updateLyrics = async (type) => {
   lyrics = undefined
   afterLyrics.value = []
   beforeLyrics.value = []
@@ -180,104 +294,158 @@ const updateLyrics = async () => {
   try {
     updateArrays()
     
-    if (playlistSongs.value[currIndex].title.includes('-') === true) {
-      artists = playlistSongs.value[currIndex].title.split('-')[0].replace(/[\(\[][^\)\]]*[\)\]]/g, '').replace(/(.*?) ft.*/i, "$1").replace(/(.*?) feat.*/i, "$1").match((/(\b[^\s]+\b)/g))
-      words = playlistSongs.value[currIndex].title.split('-')[1].replace(/[\(\[][^\)\]]*[\)\]]/g, '').match((/(\b[^\s]+\b)/g))
-      updateArrays()
-      updateApiUrl()
-    }   
+    if (type !== 'single') {
+      if (playlistSongs.value[currIndex].title.includes('-') === true) {
+        artists = playlistSongs.value[currIndex].title.split('-')[0]
+        words = playlistSongs.value[currIndex].title.split('-')[1]
+        updateApiUrl()
+        updateArrays()
+      }
+      
+      duration = playlistSongs.value[currIndex].duration
+    } else {
+      duration = undefined
+    }
     
-    const response = await axios.post(`http://${config.ipv4}:3000/getlyrics`, {
+    const response = await axios.post(`/api/getlyrics`, {
         artist: encode(artistName),
         song: encode(songName),
-        duration: playlistSongs.value[currIndex].duration
+        duration: duration,
+        url: apiUrl,
+        method: (artistName === '' || songName === '') ? 'single' : type,
+        videoUrl: songUrlInput.value.split('=')[1]
     })
 
-    lyrics = response.data.lyrics
-    currArtist.value = response.data.artist
-    currSong.value = response.data.song
-
-    if (response.data === false) {
-      try {
-        const response2 = await axios.get(`/api/api/lyrics?q=${apiUrl}`)
-        lyrics = response2.data
-        lyrics.forEach((lyric) => lyric.seconds = `${lyric.seconds}.00`)
-
+    if (lyrics === undefined) {
+      if (response.data.fallback !== true) {  
+        lyrics = response.data.lyrics
+        currArtist.value = response.data.artist
+        currSong.value = response.data.song
+      } else {
+        lyrics = response.data.lyrics
         currSong.value = songName
         currArtist.value = artistName
-      } catch (error) {
-        console.log(error, 'NO LYRICS AVAILABLE')
+      }
+
+      if (type === 'single') {
+        playlistSongs.value.push({url: songUrlInput.value.split('=')[1], title: currSong.value, author: currArtist.value, duration: response.data.duration})
+        currIndex = playlistSongs.value.length - 1
+      }
+
+      if (response.data === false) {
+        console.log('NO LYRICS AVAILABLE')
         lyrics = undefined
         currSong.value = playlistSongs.value[currIndex].title
         currArtist.value = playlistSongs.value[currIndex].author
       }
+
+      timeSliderInterval = setInterval(() => {
+        currentTimeSlider.value.style.left = `${(Math.round(player.getCurrentTime()) / Math.round(player.getDuration())) * 100}%`
+        animateTimeSlider()
+      }, 3000)
     }
+
+    let songEnded = false
           
     checkInterval = setInterval(() => {
-      roundedPlayerTime = Math.round(player.getCurrentTime())
-      rounedPlayerFullTime = Math.round(player.getDuration())
-
-      songTime.value = `${roundedPlayerTime} / ${rounedPlayerFullTime}`
+      try {
+        roundedPlayerTime = Math.round(player.getCurrentTime())
+        rounedPlayerFullTime = Math.round(player.getDuration())
+        songTime.value = `${roundedPlayerTime} / ${rounedPlayerFullTime}`
+      } catch (e) {
+        songTime.value = `Loading`
+      }
 
       if (lyrics === undefined) {
         currentLyricsVal.value = 'No Lyrics Found'
-      }
+      } else {
+        if (Math.round(player.getCurrentTime()) < Math.round(lyrics[0].seconds) && afterLyrics.value.length === 0) {
+          currentLyricsVal.value = ''
+          for (let i4 = 0; i4 < lyrics.length; i4++) { afterLyrics.value.push(lyrics[i4])}
+        }
 
-      if (Math.round(player.getCurrentTime()) < Math.round(lyrics[0].seconds)) {
-        currentLyricsVal.value = ''
-        for (let i4 = 0; i4 < lyrics.length; i4++) { afterLyrics.value.push(lyrics[i4])}
-      }
+        let previousCurrentLyrics
 
-      lyrics.forEach((lyric, i) => {
-        if (player.getPlayerState() !== 2) {
-            if (lyric.seconds.toFixed(1) === player.getCurrentTime().toFixed(1)) {
-              currentLyricsVal.value = lyric.lyrics
-              afterLyrics.value = []
-              beforeLyrics.value = []
-                
-              if (i !== 0) {
-                for (let i2 = 0; i2 < i; i2++) { beforeLyrics.value.push(lyrics[i2]);}
-              }
-              for (let i3 = i + 1; i3 < lyrics.length; i3++) { afterLyrics.value.push(lyrics[i3]) }
-                
-              if (player.getPlayerState() !== 2) {
+        lyrics.forEach((lyric, i) => {
+          if (player.getPlayerState() !== 2) {
+              if (parseInt(lyric.seconds).toFixed(1) === player.getCurrentTime().toFixed(1) && previousCurrentLyrics !== lyric.seconds) {
+                previousCurrentLyrics = lyric.seconds
+                currentLyricsVal.value = lyric.lyrics
+                afterLyrics.value = []
+                beforeLyrics.value = []
+                  
+                if (i !== 0) {
+                  for (let i2 = 0; i2 < i; i2++) { beforeLyrics.value.push(lyrics[i2]);}
+                }
+                for (let i3 = i + 1; i3 < lyrics.length; i3++) { afterLyrics.value.push(lyrics[i3]) }
+                  
                 currentLyrics.value.scrollIntoView({behavior: 'smooth', block: 'center'})
-              }
-          }
-        } 
-      })
-
-      if (roundedPlayerTime ===  rounedPlayerFullTime || roundedPlayerTime === rounedPlayerFullTime - 1) {
-        playlistAction(Math.floor(Math.random() * playlistSongs.value.length))
+            }
+          } 
+        })
       }
-    },50)
-  } catch (error) {
-    console.log(error)
-  }
+
+      if (roundedPlayerTime === rounedPlayerFullTime - 1) {
+        if (loop === true) {
+          return player.seekTo(0)
+        }
+        if (playlistSongs.value.length !== 0) {
+          if (shuffle === true && songEnded === false) {
+            songEnded = true
+            return playlistAction('',Math.floor(Math.random() * playlistSongs.value.length))
+          }
+          playlistAction('',currIndex + 1)
+        }
+      }
+    },100)
+  } catch (e) {console.log(e)}
 }
 
-const handleInput = async (type) => {
+const handleInput = async (type, queue) => {
   artists = []
   words = []
 
   if (type ===  'playlist') {
     try {
-      const response = await axios.post(`http://${config.ipv4}:3000/playlist`, {
+      const response = await axios.post(`/api/playlist`, {
           url: `${playlistUrl.value}`
       })
       
       playlistSongs.value = response.data.songs
-    } catch (error) {
-      console.log(error)
-    }
+      playedSongs = []
+      currAbsoluteIndex = 0
+      togglePlaylistVisible()
+      toggleInputsVisible()
+    } catch (e) {console.log(e)}
   } else {
-    words = song.value.match((/(\b[^\s]+\b)/g))
-    artists = artist.value.match((/(\b[^\s]+\b)/g))
+    words = song.value
+    artists = artist.value
 
     updateApiUrl()
 
-    await updatePlayer(songUrlInput.value.split('=')[1])
-    await updateLyrics()
+    toggleInputsVisible()
+
+    if (queue === true) {
+      try {
+        const response = await axios.post(`/api/getlyrics`, {
+          artist: encode(artist.value),
+          song: encode(song.value),
+          duration: undefined,
+          url: apiUrl,
+          method: type,
+          videoUrl: songUrlInput.value.split('=')[1]
+        })
+
+        playlistSongs.value.push({url: songUrlInput.value.split('=')[1], title: response.data.song, author: response.data.artist})
+      } catch (e) {
+        console.log(e)
+      }
+    } else {
+      clearInterval(timeSliderInterval)
+      clearInterval(checkInterval)
+      await updatePlayer(songUrlInput.value.split('=')[1])
+      await updateLyrics('single')
+    }
   }
 }
 
@@ -285,36 +453,49 @@ const handleInput = async (type) => {
 
 <template>
   <main>
-    <h1>Song Lyrics</h1>
-    <div id="inputselector">
-      <vueSelect :options="['Single', 'Playlist']" v-model="selectedInput" :on-change="updateInputs()"></vueSelect>
-    </div>
-    <div id="inputs">
-      <form @submit.prevent="handleInput('single')" v-show="visibleOptions.single">
-        <input type="text" placeholder="Enter artist name" v-model="artist">
-        <input type="text" placeholder="Enter song name" v-model="song">
-        <input type="text" placeholder="Enter song url" v-model="songUrlInput">
-        <button type="submit">Submit</button>
-      </form>
+    <h1>Song Lyrics (BETA VERSION, MADE BY: SHLEV)</h1>
 
-      <form @submit.prevent="handleInput('playlist')" v-show="visibleOptions.playlist">
-        <input type="text" placeholder="Enter youtube playlist url" v-model="playlistUrl">
-        <button type="submit">Submit</button>
-      </form>
-    </div>
-    
-    <div id="playlistvisiblediv">
-      <button id="playlistvisible" @click="updatePlaylist">
-        <p v-if="playlistVisible === true">Hide Playlist</p>
-        <p v-else>Show Playlist</p>
-      </button>
+    <img src="../assets/play.png" id="inputsVisibleImg" @click="toggleInputsVisible" ref="inputsVisibleImg" class="visibleimages active">
+
+    <div id="startui" v-show="inputsVisible">
+      <div id="inputselector">
+        <vueSelect :options="['Single', 'Playlist']" v-model="selectedInput" :on-change="updateInputs()"></vueSelect>
+      </div>
+
+      <div id="inputs">
+        <form v-show="visibleOptions.single" id="singleinputdiv" class="inputdiv">
+          <div class="inputs">
+            <input type="text" placeholder="Enter artist name (Optional)" v-model="artist">
+            <input type="text" placeholder="Enter song name (Optional)" v-model="song">
+            <input type="text" placeholder="Enter song url" v-model="songUrlInput">
+          </div>
+
+          <div id="buttonsdiv">
+            <button type="submit" class="submit" @click.prevent="handleInput('single')">Play</button>
+            <button type="submit" class="submit" @click.prevent="handleInput('single', true)">Add to Queue</button>
+          </div>
+        </form>
+
+        <form @submit.prevent="handleInput('playlist')" v-show="visibleOptions.playlist" id="playlistinputdiv" class="inputdiv">
+          <div class="inputs">
+            <input type="text" placeholder="Enter youtube playlist url" v-model="playlistUrl">
+          </div>
+          <button type="submit" class="submit">Submit</button>
+        </form>
+      </div>
     </div>
 
-    <div id="playlist" v-show="playlistVisible">
-      <div v-for="(song, i) in playlistSongs" id="playlistsongdiv">
-        <p id="title" class="songdata">{{ song.title }}</p>
-        <p id="author" class="songdata">{{ song.author }}</p>
-        <button @click="playPlaylistSong(i)">Play</button>
+    <div id="playlistparent">
+      <img src="../assets/play.png" id="playlistVisibleImg" @click="togglePlaylistVisible" ref="playlistVisibleImg" class="visibleimages">
+      <div id="playlist" v-show="playlistVisible">
+        <div id="playlistsongsparent" ref="playlistSongsParent">
+          <div v-for="(song, i) in playlistSongs" id="playlistsongdiv">
+            <p id="title">{{ song.title }}</p>
+            <p id="author">{{ song.author }}</p>
+            <img src="../assets/play.png" id="playplaylistsong" @click="playPlaylistSong(i, $event.currentTarget)">
+            <img src="../assets/remove.png" @click="playlistAction('remove', i)">
+          </div>
+        </div>
       </div>
     </div>
 
@@ -324,7 +505,7 @@ const handleInput = async (type) => {
       
         <div id="lyrics">
           <div id="previouslyrics" class="lyricsdiv">
-            <p class="lyric" v-for="lyric in beforeLyrics">{{ lyric.lyrics }}</p>
+            <p class="lyric" v-for="(lyric, i) in beforeLyrics" :key="i">{{ lyric.lyrics }}</p>
           </div>
           <p id="currentlyrics" ref="currentLyrics" class="lyric">{{ currentLyricsVal }}</p>
           <div id="afterlyrics" class="lyricsdiv">
@@ -334,22 +515,39 @@ const handleInput = async (type) => {
       </div>
     </div>
 
-    <div id="currentlyplayingdiv" @click="updateSongState('duration', $event)">
-      <div id="songtimeslider" ref="songTimeSlider" :class="songTimeSliderClass"></div>
-      <div id="playoptions">
-        <img src="../assets/previous.png" id="previoussongimg" @click="updateSongState('previous')">
-        <img ref="songStateImg" @click="updateSongState('state')" id="songStateImg" :src="playImg">
-        <img src="../assets//next.png" id="nextsongimg" @click="updateSongState('next')">
-        <p id="songtime">{{ songTime }}</p>
+    <div id="currentlyplayingdiv">
+      <div id="timebardiv" @mouseenter="timeBarClass = 'active'" @mouseleave="timeBarClass = ''">
+        <div id="timebar" @click="updateSongState('duration', $event)" :class="timeBarClass"></div>
+        <div id="timeBarIndicator" ref="timeBarIndicator" :style="{left: timeBarIndicatorStyles.left, opacity: timeBarIndicatorStyles.opacity}"></div>
       </div>
+      <div id="currentlyplayingmain">
+        <div id="currenttimeslider" ref="currentTimeSlider"></div>
+        <div id="playdata">
+          <div id="playoptions" @mouseenter="clickableHover = true" @mouseleave="clickableHover = false">
+            <img src="../assets/previous.png" @click="playlistAction('previous')" class="controlimage">
+            <img ref="songStateImg" @click="updateSongState('state')" id="songStateImg" :src="playImg">
+            <img src="../assets/next.png" @click= "playlistAction('next', currIndex + 1)" id="nextbtnimage">
+          </div>
+          <p id="songtime">{{ songTime }}</p>
+        </div>
 
-      <div id="songinfo">
-        <img id="cover" :src="coverSrc">
-        <div id="details">
-          <p id="songname">{{ currSong }}</p>
-          <p id="songartist">{{ currArtist }}</p>
+        <div id="songinfo">
+          <img id="cover" :src="coverSrc">
+          <div id="details">
+            <p id="songname">{{ currSong }}</p>
+            <p id="songartist">{{ currArtist }}</p>
+        </div>
+
+        <div id="extraplayoptions" @mouseenter="clickableHover = true" @mouseleave="clickableHover = false">
+          <img id="loopImg" src="../assets/loop.png" @click="updateSongState('loop')" ref="loopImg" class="controlimage">
+          <img id="shuffleImg" src="../assets/shuffle.png" @click="updateSongState('shuffle')" ref="shuffleImg" class="controlimage">
+          <div id="volumediv"  @mouseleave="volumeSliderOpacity = 0">
+            <img id="volumeImg" src="../assets/volume.png" ref="volumeImg" @mouseenter="volumeSliderOpacity = 1" class="controlimage"> 
+            <input type="range" id="volumeslider" min="0" max="50" v-model="currentVolume" @input="updateSongState('volume')" :style="{opacity: volumeSliderOpacity}">
+          </div>
         </div>
       </div>
+    </div>
     </div>
   </main>
 </template>

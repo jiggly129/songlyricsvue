@@ -6,37 +6,41 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "server": "nodemon --ignore public/config.json server/app.js",
-    "start": "start npm run dev && start npm run server"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@distube/ytpl": "^1.2.1",
-    "@vue/cli-service": "^3.3.1",
+    "@vueuse/components": "^13.3.0",
     "@vueuse/core": "^13.1.0",
     "ascii-url-encoder": "^1.2.0",
     "axios": "^1.9.0",
     "cors": "^2.8.5",
-    "express": "^5.1.0",
+    "express": "^5.2.1",
     "http-proxy-middleware": "^3.0.5",
     "i": "^0.3.7",
     "jsesc": "^3.1.0",
-    "music-downloader": "^1.0.0",
+    "nodemon": "^3.1.14",
     "npm": "^11.3.0",
     "puppeteer-core": "^24.3.0",
+    "spotify-web-api-node": "^5.0.2",
     "typl": "^0.3.0",
     "vite-plugin-fs": "^0.4.4",
-    "vue": "^3.5.13",
+    "vue": "^3.5.15",
     "vue-router": "^4.5.0",
     "vue-select": "^4.0.0-beta.6",
+    "vue-virtual-scroll-grid": "^1.11.0",
+    "vue-virtual-scroller": "^2.0.0-beta.8",
     "youtube-dl-exec": "^3.0.20",
     "youtube-player": "^5.6.0",
     "youtube-playlist": "^1.0.4",
+    "youtubei": "^1.7.0",
+    "youtubei.js": "^17.0.1",
     "ytpl": "^2.3.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/compiler-sfc": "^3.5.16",
     "vite": "^6.1.0",
-    "vite-plugin-vue-devtools": "^7.7.2"
+    "vite-plugin-vue-devtools": "^7.7.2",
+    "vue-clusterize": "^0.5.1"
   }
 }
