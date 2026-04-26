@@ -26,6 +26,7 @@ let clickableHover = false
 let shuffle = false
 let playedSongs = []
 let currAbsoluteIndex = 0
+let isSwitchingSong = false
 const artist = ref('')
 const song = ref('')
 const currentLyricsVal = ref('')
@@ -56,6 +57,7 @@ const timeBarIndicatorStyles = ref({left: 0, opacity: 0})
 const timeBarClass = ref('')
 const inputsVisibleImg = ref('inputsVisibleImg')
 const inputsVisible = ref(true)
+const activeIndex = ref(null)
 
 const {space} = useMagicKeys()
 
@@ -154,6 +156,8 @@ const setImgAttribute = (type, img) => {
 }
 
 const playPlaylistSong = async (i, el) => {
+  activeIndex.value = i
+
   if (i === currIndex) {
     if (player.getPlayerState() === 2) {
       player.playVideo()
@@ -172,17 +176,12 @@ const playPlaylistSong = async (i, el) => {
         found = true
       } else if (index === playedSongs.length - 1 && found === false) {
         playedSongs.push(i)
-        // playlistSongsParent.value.children[playedSongs[playedSongs.length - 2]].classList.remove('active')
         setImgAttribute('play', playlistSongsParent.value.children[playedSongs[playedSongs.length - 2]].children[2])
       }
     })
   } else {
     playedSongs.push(i)
   }
-  
-  try {
-    playlistSongsParent.value.children[currIndex].classList.remove('active')
-  } catch (e) {console.log(e)}
 
   artists = []
   words = []
@@ -199,7 +198,6 @@ const playPlaylistSong = async (i, el) => {
   await updateLyrics()
   
   setImgAttribute('pause', playlistSongsParent.value.children[i].children[2])
-  playlistSongsParent.value.children[i].classList.toggle('active')
   playlistSongsParent.value.children[i].scrollIntoView({behavior: 'smooth', block: 'center'})
 }
 
@@ -339,13 +337,16 @@ const updateLyrics = async (type) => {
         currArtist.value = playlistSongs.value[currIndex].author
       }
 
+      if (timeSliderInterval) {
+        clearInterval(timeSliderInterval)
+        timeSliderInterval = null
+      }
+
       timeSliderInterval = setInterval(() => {
         currentTimeSlider.value.style.left = `${(Math.round(player.getCurrentTime()) / Math.round(player.getDuration())) * 100}%`
         animateTimeSlider()
       }, 3000)
     }
-
-    let songEnded = false
           
     checkInterval = setInterval(() => {
       try {
@@ -385,17 +386,26 @@ const updateLyrics = async (type) => {
         })
       }
 
-      if (roundedPlayerTime === rounedPlayerFullTime - 1) {
+      if (roundedPlayerTime >= rounedPlayerFullTime - 1 && !isSwitchingSong) {
+        isSwitchingSong = true
+
         if (loop === true) {
-          return player.seekTo(0)
+          player.seekTo(0)
+          isSwitchingSong = false
+          return
         }
+
         if (playlistSongs.value.length !== 0) {
-          if (shuffle === true && songEnded === false) {
-            songEnded = true
-            return playlistAction('',Math.floor(Math.random() * playlistSongs.value.length))
+          if (shuffle === true) {
+            playlistAction('', Math.floor(Math.random() * playlistSongs.value.length))
+          } else {
+            playlistAction('', currIndex + 1)
           }
-          playlistAction('',currIndex + 1)
         }
+
+        setTimeout(() => {
+          isSwitchingSong = false
+        }, 1000)
       }
     },100)
   } catch (e) {console.log(e)}
@@ -489,7 +499,7 @@ const handleInput = async (type, queue) => {
       <img src="../assets/play.png" id="playlistVisibleImg" @click="togglePlaylistVisible" ref="playlistVisibleImg" class="visibleimages">
       <div id="playlist" v-show="playlistVisible">
         <div id="playlistsongsparent" ref="playlistSongsParent">
-          <div v-for="(song, i) in playlistSongs" id="playlistsongdiv">
+          <div v-for="(song, i) in playlistSongs" :key="song.url" :class="{ active: i === activeIndex }" id="playlistsongdiv">
             <p id="title">{{ song.title }}</p>
             <p id="author">{{ song.author }}</p>
             <img src="../assets/play.png" id="playplaylistsong" @click="playPlaylistSong(i, $event.currentTarget)">
