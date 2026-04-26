@@ -1,5 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Cascadia+Mono:ital,wght@0,200..700;1,200..700&family=Fira+Sans:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Lato:ital,wght@0,100;0,300;0,400;0,700;0,900;1,100;1,300;1,400;1,700;1,900&family=Libertinus+Mono&family=Montserrat:ital,wght@0,100..900;1,100..900&family=Oxygen:wght@300;400;700&display=swap');
 
+* {
+    box-sizing: border-box;
+}
+
 body {
     margin: 0;
     background: rgb(231, 227, 227);
@@ -265,6 +269,7 @@ h1 {
     height: 1.5vh;
     position: fixed;
     bottom: 12%;
+    position: relative;
 }
 
 #timebar.active {
@@ -417,5 +422,95 @@ h1 {
         opacity: 1;
     } 100% {
         opacity: 0;
+    }
+}
+
+@media (max-width: 768px) {
+
+    h1 {
+        font-size: 1.2em;
+    }
+
+    .visibleimages {
+        width: 12vw;
+        height: 12vw;
+        filter: drop-shadow(2px 0 0 white);
+    }
+
+    .v-select {
+        width: 90vw;
+    }
+
+    .inputs {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .inputs > input {
+        width: 80vw;
+        height: 40px;
+        font-size: 14px;
+    }
+
+    .submit {
+        width: 60vw;
+        height: 45px;
+    }
+
+    #startui {
+        width: 95vw;
+        left: 2.5vw;
+        top: 10%;
+        height: auto;
+        padding: 10px;
+    }
+
+    #playlist {
+        display: none; 
+    }
+
+    #playlistsongsparent {
+        width: 100%;
+        right: 0;
+        bottom: 20%;
+    }
+
+    #playlistsongdiv > p {
+        font-size: 14px;
+    }
+
+    #playlistsongdiv > img {
+        width: 20px;
+    }
+
+    #currentlyplayingdiv {
+        height: 80px;
+    }
+
+    #timebardiv {
+        height: 40px;
+    }
+
+    #timebar {
+        height: 5px;
+    }
+
+    #songtime {
+        font-size: 14px;
+    }
+
+    #cover {
+        width: 60px;
+        height: auto;
+    }
+
+    #songStateImg {
+        width: 50px;
+        height: 50px;
+    }
+
+    #nextbtnimage {
+        width: 35px;
+        height: 35px;
     }
 }
