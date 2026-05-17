@@ -7,6 +7,10 @@ import 'vue-select/dist/vue-select.css';
 import playImg from '@/assets/play.png'
 import pauseImg from '@/assets/pause.png'
 import { useMagicKeys } from '@vueuse/core'
+// import https from 'https'
+// import { Client, MusicClient } from "youtubei";
+
+// const youtube = new Client()
  
 let lyrics
 let player
@@ -305,32 +309,103 @@ const updateLyrics = async (type) => {
       duration = undefined
     }
     
-    const response = await axios.post(`/api/getlyrics`, {
-        artist: encode(artistName),
-        song: encode(songName),
-        duration: duration,
-        url: apiUrl,
-        method: (artistName === '' || songName === '') ? 'single' : type,
-        videoUrl: songUrlInput.value.split('=')[1]
-    })
+    const getLyrics = async (method) => {
+      let lyricsLoc = []
+
+      const parse = (response) => {
+        if (response.data.syncedLyrics === null) {
+          return false
+        } 
+
+        response.data.syncedLyrics.split('\n').forEach((line, i) => {
+          lyricsLoc.push({
+              seconds: (parseInt(line.split(']')[0].substring(1,3)) * 60) + parseInt(line.split(']')[0].substring(4,6)) + (parseInt(line.split(']')[0].substring(7,9)) / 100),
+              lyrics: line.substring(11, line.length)
+          })
+        })
+
+        return {
+          song: response.data.trackName,
+          artist: response.data.artistName,
+          lyrics: lyricsLoc,
+          fallback: false,
+          duration: response.data.duration
+        }
+      }
+
+      if (method === 'single' && encode(artistName) === '' && encode(songName) === '') {
+        let artist
+        let song
+
+        // try {
+        //   const video = await youtube.getVideo(`${songUrlInput.value.split('=')[1]}`)
+
+        //   if (video.title.includes('-')) {
+        //     artist = video.title.split('-')[0].replace(/[\(\[][^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi, '')
+        //     song = video.title.split('-')[1].replace(/[\(\[][^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi, '')
+        //   } else {
+        //     artist = video.channel.name.replace(/[\(\[][^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi, '')
+
+        //     if (video.channel.name.includes('-')) {
+        //       artist = artist.split('-')[0]
+        //     }
+        //     song = video.title.replace(/[\(\[][^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi, '')
+        //   }
+          
+        //   parse(await axios.get(`https://lrclib.net/api/get?artist_name=${artist}&track_name=${song}&duration=${video.duration}`))
+        // } catch (e) {console.log(e)}
+      } else {
+        try {
+          console.log('SENT LYRICS')
+          if (duration === undefined) {
+            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName)}&track_name=${encode(songName)}`))
+          } else {
+            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName)}&track_name=${encode(songName)}&duration=${duration}`))
+          }
+        } catch (error) {
+          try {
+            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName).substring(0, encode(artistName).indexOf("%", encode(artistName).indexOf("%") + 1))}&track_name=${encode(songName)}&duration=${duration}`))
+          } catch (error) {
+            const agent = new https.Agent({
+              rejectUnauthorized: false,
+            });
+            
+            try {
+              const response = await axios.get(`https://api.textyl.co/api/lyrics?q=${apiUrl}`, {insecureHTTPParser: true, httpsAgent: agent})
+              const lyricsLoc2 = response.data
+      
+              lyricsLoc2.forEach((lyric) => lyric.seconds = `${lyric.seconds}.00`)
+              
+              console.log('SENT LYRICS FALLBACK')
+              return {lyrics: lyricsLoc2, fallback: true}
+            } catch (error) {
+              console.log('NO LYRICS FOUND', error)
+              return false
+            }
+          } 
+        }
+      }
+    }
+
+    const response = await getLyrics((artistName === '' || songName === '') ? 'single' : type)
 
     if (lyrics === undefined) {
-      if (response.data.fallback !== true) {  
-        lyrics = response.data.lyrics
-        currArtist.value = response.data.artist
-        currSong.value = response.data.song
+      if (response.fallback !== true) {  
+        lyrics = response.lyrics
+        currArtist.value = response.artist
+        currSong.value = response.song
       } else {
-        lyrics = response.data.lyrics
+        lyrics = response.lyrics
         currSong.value = songName
         currArtist.value = artistName
       }
 
       if (type === 'single') {
-        playlistSongs.value.push({url: songUrlInput.value.split('=')[1], title: currSong.value, author: currArtist.value, duration: response.data.duration})
+        playlistSongs.value.push({url: songUrlInput.value.split('=')[1], title: currSong.value, author: currArtist.value, duration: response.duration})
         currIndex = playlistSongs.value.length - 1
       }
 
-      if (response.data === false) {
+      if (response === false) {
         console.log('NO LYRICS AVAILABLE')
         lyrics = undefined
         currSong.value = playlistSongs.value[currIndex].title
@@ -417,7 +492,7 @@ const handleInput = async (type, queue) => {
 
   if (type ===  'playlist') {
     try {
-      const response = await axios.post(`/api/playlist`, {
+      const response = await axios.post(`https://syncedlyrics.vercel.app/api/playlist`, {
           url: `${playlistUrl.value}`
       })
       
@@ -464,10 +539,12 @@ const handleInput = async (type, queue) => {
 <template>
   <main>
     <h1>Song Lyrics (BETA VERSION, MADE BY: SHLEV)</h1>
-
+    
     <img src="../assets/play.png" id="inputsVisibleImg" @click="toggleInputsVisible" ref="inputsVisibleImg" class="visibleimages active">
 
+
     <div id="startui" v-show="inputsVisible">
+
       <div id="inputselector">
         <vueSelect :options="['Single', 'Playlist']" v-model="selectedInput" :on-change="updateInputs()"></vueSelect>
       </div>

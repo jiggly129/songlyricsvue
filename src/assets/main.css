@@ -395,7 +395,10 @@ h1 {
 #extraplayoptions {
     display: flex;
     flex-direction: row;
-    gap: 15%;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: nowrap;
+    white-space: nowrap;
 }
 
 #extraplayoptions > img.active {
@@ -405,9 +408,9 @@ h1 {
 #volumediv {
     display: flex;
     flex-direction: row;
-    justify-content: center;
     align-items: center;
-    gap: 5%;
+    gap: 6px;
+    flex-shrink: 0;
 }
 
 #volumeslider {
@@ -428,92 +431,208 @@ h1 {
     }
 }
 
-@media (max-width: 768px) {
+/* @media (max-width: 768px) {
 
+    body {
+      font-size: 14px;
+    }
+  
     h1 {
-        font-size: 1.2em;
+      font-size: 18px;
+      padding: 10px;
     }
-
+  
+    #startui {
+      width: 95vw;
+      left: 2.5vw;
+      top: 5%;
+      height: auto;
+      padding: 12px;
+      border-radius: 10px;
+    }
+  
+    .inputs {
+      flex-direction: column;
+      gap: 10px;
+    }
+  
+    .inputs > input {
+      width: 90vw;
+      height: 45px;
+      font-size: 16px;
+    }
+  
+    .submit {
+      width: 90vw;
+      height: 45px;
+      font-size: 16px;
+    }
+  
+    #playlist {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0,0,0,0.95);
+      overflow-y: auto;
+    }
+  
+    #playlistsongsparent {
+      width: 100%;
+      position: relative;
+      bottom: auto;
+      top: 60px;
+    }
+  
+    #playlistsongdiv {
+      width: 95%;
+      margin: 5px auto;
+    }
+  
+    #playlistsongdiv > p {
+      font-size: 14px;
+    }
+  
+    #currentlyplayingdiv {
+      height: auto;
+      padding: 10px;
+      flex-direction: column;
+    }
+  
+    #currentlyplayingmain {
+      flex-direction: row;
+      gap: 10px;
+    }
+  
+    #playoptions {
+      gap: 20px;
+    }
+  
+    #songStateImg {
+      width: 60px;
+      height: 60px;
+    }
+  
+    #nextbtnimage,
+    #playoptions > img {
+      width: 35px;
+      height: 35px;
+    }
+  
+    #songinfo {
+      flex-direction: column;
+      gap: 10px;
+    }
+  
+    #cover {
+      width: 120px;
+      height: auto;
+    }
+  
+    #songtime {
+      font-size: 14px;
+      width: auto;
+      margin: 0;
+    }
+  
+    #timebar {
+      height: 6px;
+    }
+  
+    #lyrics {
+      padding: 10px;
+    }
+  
+    #currentlyrics {
+      font-size: 18px;
+      text-align: center;
+    }
+  
+    .lyric {
+      font-size: 14px;
+      text-align: center;
+    }
+  
     .visibleimages {
-        width: 12vw;
-        height: 12vw;
-        filter: drop-shadow(2px 0 0 white);
+      width: 50px;
+      height: 50px;
+    }
+  
+    #inputsVisibleImg {
+      left: 85%;
+      top: 10px;
+      transform: rotate(0deg);
+    }
+  
+    #playlistVisibleImg {
+      right: 10px;
+      bottom: 10px;
+      transform: rotate(0deg);
     }
 
-    .v-select {
-        width: 90vw;
+    #extraplayoptions {
+        gap: 8px;
+    }
+    
+    #volumeslider {
+        width: 60px;
+    }
+
+    .controlimage {
+        width: 90px;
+        height: 90px;
+    }
+  } */
+
+@media (max-width: 768px) {
+    h1 {
+        font-size: 10px;
+    }
+
+    #startui {
+        height: 70vh;
+        width: 80vw;
+        padding: 0px;
+        justify-content: space-evenly;
+        
+    }
+
+    #singleinputdiv {
+        flex-direction: column;
+        width: 100%;
     }
 
     .inputs {
         flex-direction: column;
-        gap: 10px;
     }
 
     .inputs > input {
-        width: 80vw;
-        height: 40px;
-        font-size: 14px;
+        width: 200px;
+        height: 25px;
+    }
+
+    #buttonsdiv > button {
+        width: fit-content;
+        height: 30px;
+        margin-top: 10px;
+    }
+
+    #playlistinputdiv {
+        flex-direction: column;
     }
 
     .submit {
-        width: 60vw;
-        height: 45px;
+        width: fit-content;
+        height: 25px;
     }
 
-    #startui {
-        width: 95vw;
-        left: 2.5vw;
-        top: 10%;
-        height: auto;
-        padding: 10px;
+    #inputsVisibleImg {
+        align-self: center;
+        margin-top: auto;
+        transform: translateX(-50%) rotate(90deg);
+        bottom: 16%;
+        left: 50%;
+        height: 20px;
     }
-
-    #playlist {
-        display: none; 
-    }
-
-    #playlistsongsparent {
-        width: 100%;
-        right: 0;
-        bottom: 20%;
-    }
-
-    #playlistsongdiv > p {
-        font-size: 14px;
-    }
-
-    #playlistsongdiv > img {
-        width: 20px;
-    }
-
-    #currentlyplayingdiv {
-        height: 80px;
-    }
-
-    #timebardiv {
-        height: 40px;
-    }
-
-    #timebar {
-        height: 5px;
-    }
-
-    #songtime {
-        font-size: 14px;
-    }
-
-    #cover {
-        width: 60px;
-        height: auto;
-    }
-
-    #songStateImg {
-        width: 50px;
-        height: 50px;
-    }
-
-    #nextbtnimage {
-        width: 35px;
-        height: 35px;
-    }
-}
+} 

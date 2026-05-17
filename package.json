@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
     "@vueuse/components": "^13.3.0",
     "@vueuse/core": "^13.1.0",
     "ascii-url-encoder": "^1.2.0",

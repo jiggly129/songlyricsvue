@@ -5,6 +5,15 @@ import {Innertube} from 'youtubei.js'
 
 export default async function getPlaylist(req, res) {
   try {
+    console.log(req.body)
+
+    if (!req.body?.url) {
+      return res.status(400).json({
+        error: 'Missing url',
+        body: req.body
+      })
+    }
+
     const youtube = await Innertube.create();
     let response = await youtube.getPlaylist(req.body.url.split('=')[1])
     
