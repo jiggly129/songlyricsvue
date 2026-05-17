@@ -3,27 +3,25 @@ import {Innertube} from 'youtubei.js'
 
 // const spotifyApi = new SpotifyWebApi()
 
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://localhost',
+]
+
 export default async function getPlaylist(req, res) {
-  res.setHeader(
-    'Access-Control-Allow-Origin',
-    'http://localhost:5173'
-  )
+  const origin = req.headers.origin
 
-  res.setHeader(
-    'Access-Control-Allow-Methods',
-    'POST, OPTIONS'
-  )
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+  }
 
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Content-Type'
-  )
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
-  // Handle preflight request
   if (req.method === 'OPTIONS') {
     return res.status(200).end()
   }
-
+  
   try {
     console.log(req.body)
 
