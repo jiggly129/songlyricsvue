@@ -538,11 +538,20 @@ const handleInput = async (type, queue) => {
           url: `${playlistUrl.value}`
       })
       
-      playlistSongs.value = response.data.songs
-      playedSongs = []
-      currAbsoluteIndex = 0
-      togglePlaylistVisible()
-      toggleInputsVisible()
+      const newSongs = response.data.songs || []
+
+      newSongs.forEach(song => {
+        const exists = playlistSongs.value.some(
+          s => s.url === song.url
+        )
+
+        if (!exists) {
+          playlistSongs.value.push(song)
+        }
+      })
+
+    togglePlaylistVisible()
+    toggleInputsVisible()
     } catch (e) {console.log(e)}
   } else {
     words = song.value
@@ -555,15 +564,10 @@ const handleInput = async (type, queue) => {
     if (queue === true) {
       const videoId = songUrlInput.value.split('=')[1]
 
-      const response = await getLyrics((artistName === '' || songName === '') ? 'single' : type)
-
-      if (!response) return
-
       playlistSongs.value.push({
         url: videoId,
-        title: response.song || song.value,
-        author: response.artist || artist.value,
-        duration: response.duration || 0
+        title: song.value,
+        author: artist.value
       })
 
       return
