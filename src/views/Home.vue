@@ -74,6 +74,37 @@ const seekToTime = (e) => {
   player.seekTo(newTime)
 }
 
+const cleanArtistSongFromTitle = (title) => {
+  if (!title) return { artist: '', song: '' }
+
+  let [artistPart, songPart] = title.split('-')
+
+  if (!songPart) {
+    return { artist: '', song: title }
+  }
+
+  const badSuffixes = ['topic', 'vevo', 'official', 'lyrics']
+
+  const cleanedArtist = artistPart
+    .trim()
+    .replace(/\[.*?\]|\(.*?\)/g, '')
+    .trim()
+
+  const cleanedSong = songPart
+    .trim()
+    .replace(/\[.*?\]|\(.*?\)/g, '')
+    .trim()
+
+  const isBadArtist = badSuffixes.some(bad =>
+    cleanedArtist.toLowerCase().includes(bad)
+  )
+
+  return {
+    artist: isBadArtist ? '' : cleanedArtist,
+    song: cleanedSong
+  }
+}
+
 const getNextIndex = () => {
   if (!playlistSongs.value.length) return -1
   return (currIndex + 1) % playlistSongs.value.length
@@ -279,6 +310,12 @@ const playlistAction = (state, i) => {
   if (!playlistSongs.value.length) return
 
   if (state === 'next') {
+    if (shuffle) {
+      const randomIndex = Math.floor(Math.random() * playlistSongs.value.length)
+
+      return playPlaylistSong(randomIndex)
+    }
+
     return playPlaylistSong(getNextIndex())
   }
 
@@ -373,12 +410,12 @@ const updateLyrics = async (type) => {
     updateArrays()
     
     if (type !== 'single') {
-      if (playlistSongs.value[currIndex].title.includes('-') === true) {
-        artists = playlistSongs.value[currIndex].title.split('-')[0]
-        words = playlistSongs.value[currIndex].title.split('-')[1]
-        updateApiUrl()
-        updateArrays()
-      }
+      const parsed = cleanArtistSongFromTitle(
+      playlistSongs.value[currIndex].title
+    )
+
+    artists = parsed.artist
+    words = parsed.song
       
       duration = playlistSongs.value[currIndex].duration
     } else {
@@ -471,11 +508,15 @@ const updateLyrics = async (type) => {
           return
         }
 
-        if (playlistSongs.value.length !== 0) {
-          if (shuffle === true) {
-            playlistAction('', Math.floor(Math.random() * playlistSongs.value.length))
+        if (playlistSongs.value.length) {
+          if (shuffle) {
+            const randomIndex = Math.floor(
+              Math.random() * playlistSongs.value.length
+            )
+
+            playPlaylistSong(randomIndex)
           } else {
-            playlistAction('', currIndex + 1)
+            playPlaylistSong(getNextIndex())
           }
         }
 
@@ -644,7 +685,7 @@ const handleInput = async (type, queue) => {
 
         <img
           src="../assets/next.png"
-          @click="playlistAction('next', currIndex + 1)"
+          @click="playlistAction('next')"
           class="newcontrolimage"
         >
 

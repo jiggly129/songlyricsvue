@@ -116,6 +116,12 @@
   #playplaylistsong { width: 1.6vw; height: 1.6vw; cursor: pointer; filter: invert(1); opacity: 0.85; transition: 0.15s ease; }
 
   #playplaylistsong:hover { opacity: 1; transform: scale(1.08); }
+
+  .playlist-body {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 20px;
+  }
   
   @media (max-width: 768px) {
     .playlist-panel {
