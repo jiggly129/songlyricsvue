@@ -4,6 +4,10 @@
     box-sizing: border-box;
 }
 
+:root {
+    --accent-color: #ff2d55;
+}
+
 body {
     margin: 0;
     background: rgb(231, 227, 227);
@@ -133,6 +137,16 @@ h1 {
     font-size: 1.35em;
     scroll-behavior: smooth;
     font-weight: bolder;
+    color: white;
+    text-shadow:
+     0 0 10px var(--accent-color),
+     0 0 22px var(--accent-color),
+     0 0 40px rgba(0, 0, 0, 0.45);
+      
+    transition:
+     text-shadow 0.4s ease,
+     color 0.4s ease;
+     letter-spacing: 0.5px;
 }
 
 #songdata {

@@ -58,8 +58,50 @@ const songTime = ref('songtime')
 const loopActive = ref(false)
 const shuffleActive = ref(false)
 const progressPercent = ref(0)
+const lyricsColor = ref('#ffffff')
 
 const {space} = useMagicKeys()
+
+const extractImageColor = (imageUrl) => {
+  const img = new Image()
+
+  img.crossOrigin = 'Anonymous'
+
+  img.onload = () => {
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+
+    canvas.width = img.width
+    canvas.height = img.height
+
+    ctx.drawImage(img, 0, 0)
+
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+
+    let r = 0
+    let g = 0
+    let b = 0
+    let count = 0
+
+    for (let i = 0; i < data.length; i += 40) {
+      r += data[i]
+      g += data[i + 1]
+      b += data[i + 2]
+      count++
+    }
+
+    r = Math.min(Math.floor(r / count) + 30, 255)
+    g = Math.min(Math.floor(g / count) + 30, 255)
+    b = Math.min(Math.floor(b / count) + 30, 255)
+
+    document.documentElement.style.setProperty(
+      '--accent-color',
+      `rgb(${r}, ${g}, ${b})`
+    )
+  }
+
+  img.src = imageUrl
+}
 
 const seekToTime = (e) => {
   if (!player || !player.getDuration) return
@@ -266,6 +308,7 @@ const updatePlayer = async (id) => {
 
   songData.value.style.backgroundImage = `url(https://img.youtube.com/vi/${id}/maxresdefault.jpg)`
   coverSrc.value = `https://img.youtube.com/vi/${id}/maxresdefault.jpg`
+  extractImageColor(coverSrc.value)
 }
 
 const setImgAttribute = (type, img) => {
