@@ -553,9 +553,21 @@ const handleInput = async (type, queue) => {
     toggleInputsVisible()
 
     if (queue === true) {
+      const videoId = songUrlInput.value.split('=')[1]
+
       const response = await getLyrics((artistName === '' || songName === '') ? 'single' : type)
-      playlistSongs.value.push({url: songUrlInput.value.split('=')[1], title: response.song, author: response.artist})
-    } else {
+
+      if (!response) return
+
+      playlistSongs.value.push({
+        url: videoId,
+        title: response.song || song.value,
+        author: response.artist || artist.value,
+        duration: response.duration || 0
+      })
+
+      return
+  } else {
       clearInterval(timeSliderInterval)
       clearInterval(checkInterval)
       await updatePlayer(songUrlInput.value.split('=')[1])
