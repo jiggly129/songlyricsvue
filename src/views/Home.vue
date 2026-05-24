@@ -119,6 +119,52 @@ const seekToTime = (e) => {
   player.seekTo(newTime)
 }
 
+const sanitizeArtistName = (rawArtist) => {
+  if (!rawArtist || typeof rawArtist !== 'string') return ''
+
+  const badWords = [
+    'topic',
+    'vevo',
+    'official',
+    'lyrics',
+    'audio',
+    'video',
+    'music',
+    'remix',
+    'cover',
+    'feat',
+    'ft',
+    'produced',
+    'presented',
+    'presents'
+  ]
+
+  const cleanFragment = (fragment) =>
+    fragment
+      .trim()
+      .replace(/\[.*?\]|\(.*?\)/g, '')
+      .trim()
+
+  const isBadFragment = (fragment) =>
+    badWords.some((bad) => new RegExp(`\\b${bad}\\b`, 'i').test(fragment))
+
+  const fragments = rawArtist
+    .split(/\s*[-–—]\s*/)
+    .map(cleanFragment)
+    .filter(Boolean)
+
+  if (fragments.length === 0) return ''
+  if (fragments.length === 1) return fragments[0]
+
+  const filtered = fragments.filter((fragment) => !isBadFragment(fragment))
+  if (filtered.length === 1) return filtered[0]
+
+  if (isBadFragment(fragments[0])) return fragments[1]
+  if (isBadFragment(fragments[1])) return fragments[0]
+
+  return fragments[0]
+}
+
 const cleanArtistSongFromTitle = (title) => {
   if (!title) return { artist: '', song: '' }
 
@@ -128,24 +174,15 @@ const cleanArtistSongFromTitle = (title) => {
     return { artist: '', song: title }
   }
 
-  const badSuffixes = ['topic', 'vevo', 'official', 'lyrics']
-
-  const cleanedArtist = artistPart
-    .trim()
-    .replace(/\[.*?\]|\(.*?\)/g, '')
-    .trim()
+  const cleanedArtist = sanitizeArtistName(artistPart)
 
   const cleanedSong = songPart
     .trim()
     .replace(/\[.*?\]|\(.*?\)/g, '')
     .trim()
 
-  const isBadArtist = badSuffixes.some(bad =>
-    cleanedArtist.toLowerCase().includes(bad)
-  )
-
   return {
-    artist: isBadArtist ? '' : cleanedArtist,
+    artist: cleanedArtist,
     song: cleanedSong
   }
 }
@@ -273,7 +310,10 @@ const updateApiUrl = () => {
   apiUrl = ''
   
   try {
-    artists = artists.replace(/[\(\[][^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi, '').match((/(\b[^\s]+\b)/g))
+    artists = Array.isArray(artists) ? artists.join(' ') : artists
+    artists = sanitizeArtistName(artists)
+    artists = artists.replace(/[\(\[][^^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi, '').match((/(\b[^\s]+\b)/g))
+    words = Array.isArray(words) ? words.join(' ') : words
     words = words.replace(/[\(\[][^\)\]]*[\)\]]/g, '').match((/(\b[^\s]+\b)/g))
 
     artists.forEach((artist) => apiUrl += ` ${artist}`)
@@ -300,18 +340,40 @@ const updatePlayer = async (id) => {
   }
 
   const YT = await loadYouTubeAPI()
+
+  // Create the player and wait for onReady so we can read the duration
+  await new Promise((resolve) => {
     player = new YT.Player(songEmbed.value, {
-    height: '360',
-    width: '640',
-    videoId: id,
-    events: {
-      onReady: () => {
-        player.playVideo()
-        player.setVolume(currentVolume.value * 2)
-        songStateImg.value.setAttribute('src', pauseImg)
-        timeBarIndicatorStyles.value.left = `0%`
+      height: '360',
+      width: '640',
+      videoId: id,
+      events: {
+        onReady: () => {
+          try {
+            player.playVideo()
+            player.setVolume(currentVolume.value * 2)
+            songStateImg.value.setAttribute('src', pauseImg)
+            timeBarIndicatorStyles.value.left = `0%`
+
+            // capture duration (some players may return 0 initially)
+            duration = Math.round(player.getDuration() || 0)
+
+            if (!duration || duration === 0) {
+              // retry shortly if duration is not yet available
+              setTimeout(() => {
+                duration = Math.round(player.getDuration() || 0)
+                resolve()
+              }, 300)
+            } else {
+              resolve()
+            }
+          } catch (e) {
+            // proceed even if reading duration fails
+            resolve()
+          }
+        }
       }
-    }
+    })
   })
 
   if (songData.value) {
@@ -413,13 +475,18 @@ const animateTimeSlider = () => {
 const updateSongState = (type, e) => {  
   switch (type) {
     case 'state': {
+      if (!player) return
+
+      const activePlaylistImg = playlistSongsParent.value?.children?.[currIndex]?.querySelector('.playlist-buttons img')
+
       if (player.getPlayerState() === 2) {
         player.playVideo()
-        setImgAttribute('pause', playlistSongsParent.value.children[currIndex].children[2])
+        if (activePlaylistImg) setImgAttribute('pause', activePlaylistImg)
         return songStateImg.value.setAttribute('src', pauseImg)
       }
+
       player.pauseVideo()
-      setImgAttribute('play', playlistSongsParent.value.children[currIndex].children[2])
+      if (activePlaylistImg) setImgAttribute('play', activePlaylistImg)
       songStateImg.value.setAttribute('src', playImg)
       break
     } case 'duration': {
@@ -661,6 +728,22 @@ const handleInput = async (type, queue) => {
     words = song.value
     artists = artist.value
 
+    // If artist and song are not provided, try to fetch them from YouTube oEmbed
+    if ((!artists || artists.trim() === '') && (!words || words.trim() === '') && songUrlInput && songUrlInput.value) {
+      try {
+        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(songUrlInput.value)}&format=json`
+        const resp = await axios.get(oembedUrl)
+        if (resp && resp.data && resp.data.title) {
+          const parsed = cleanArtistSongFromTitle(resp.data.title)
+          artists = parsed.artist || ''
+          words = parsed.song || ''
+        }
+      } catch (e) {
+        // ignore oEmbed failures and fall back to user input
+        console.log('oEmbed fetch failed or invalid URL', e)
+      }
+    }
+
     updateApiUrl()
 
     toggleInputsVisible()
@@ -674,8 +757,8 @@ const handleInput = async (type, queue) => {
     if (queue === true) {
       playlistSongs.value.push({
         url: videoId,
-        title: song.value || 'Unknown Title',
-        author: artist.value || 'Unknown Artist'
+        title: words || song.value || 'Unknown Title',
+        author: artists || artist.value || 'Unknown Artist'
       })
 
       return

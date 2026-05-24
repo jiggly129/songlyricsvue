@@ -15,6 +15,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <RouterView />
+  <div class="app-shell">
+    <nav class="app-nav">
+      <RouterLink to="/">Home</RouterLink>
+      <RouterLink to="/about">About Me</RouterLink>
+    </nav>
+    <RouterView />
+  </div>
 </template>
 
