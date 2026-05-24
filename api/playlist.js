@@ -32,37 +32,44 @@ export default async function getPlaylist(req, res) {
       })
     }
 
-    const youtube = await Innertube.create();
-    let response = await youtube.getPlaylist(req.body.url.split('=')[1])
-    
-    const items = [...response.items]
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Playlist fetch timeout')), 15000)
+    )
 
-    while (response.has_continuation) {
-      const next = await response.getContinuation()
-      next.items.forEach((item) => items.push(item))
+    const fetchPlaylist = async () => {
+      const youtube = await Innertube.create();
+      let response = await youtube.getPlaylist(req.body.url.split('=')[1])
       
-      response = next
-      
-      if (response.has_continuation === false) {
-        break
+      const items = [...response.items]
+
+      while (response.has_continuation) {
+        const next = await response.getContinuation()
+        next.items.forEach((item) => items.push(item))
+        
+        response = next
+        
+        if (response.has_continuation === false) {
+          break
+        }
       }
+      
+      const data = {songs: []}
+
+      items.forEach((item) => {
+          data.songs.push({url: item.id, title: item.title.text, author: item.author.name, duration: item.duration.seconds})
+      })
+
+      return data
     }
-    
-    const data = {songs: []}
 
-    items.forEach((item) => {
-        data.songs.push({url: item.id, title: item.title.text, author: item.author.name, duration: item.duration.seconds})
-    })
-
+    const data = await Promise.race([fetchPlaylist(), timeoutPromise])
     res.json(data)
     console.log('SENT PlAYLIST')
   } catch (error) {
       console.log(error)
-      // try {
-        // const response = await spotifyApi.getPlaylist(req.body.url.substring(34, req.body.url.indexOf('?')))
-        // console.log(response.data.body)
-      // } catch (error) {
-      //   console.log(error)
-      // }
-  }  
+      res.status(400).json({
+        error: 'Failed to fetch playlist. Please check the URL and try again.',
+        details: error.message
+      })
+  }
 }

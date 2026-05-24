@@ -2,10 +2,10 @@
 import {ref} from 'vue'
 import axios from 'axios'
 import { encode } from 'ascii-url-encoder';
-import vueSelect from 'vue-select'
-import 'vue-select/dist/vue-select.css';
 import playImg from '@/assets/play.png'
 import pauseImg from '@/assets/pause.png'
+import volumeImg from '@/assets/volume.png'
+import mutedImg from '@/assets/muted.png'
 import { useMagicKeys } from '@vueuse/core'
 // import https from 'https'
 // import { Client, MusicClient } from "youtubei";
@@ -49,7 +49,7 @@ const currentTimeSlider = ref('currentTimeSlider')
 const playlistSongsParent = ref('playlistSongsParent')
 const currentVolume = ref(50)
 const timeBarIndicatorStyles = ref({left: 0, opacity: 0})
-const inputsVisibleImg = ref('inputsVisibleImg')
+const isMuted = ref(false)
 const inputsVisible = ref(true)
 const activeIndex = ref(null)
 const inputWrapper = ref('inputWrapper')
@@ -59,6 +59,9 @@ const loopActive = ref(false)
 const shuffleActive = ref(false)
 const progressPercent = ref(0)
 const lyricsColor = ref('#ffffff')
+const currentRequestId = ref(0)
+const playlistStatus = ref('')
+let lyricsAbortController = null
 
 const {space} = useMagicKeys()
 
@@ -147,6 +150,13 @@ const cleanArtistSongFromTitle = (title) => {
   }
 }
 
+const extractYouTubeVideoId = (url) => {
+  if (!url || typeof url !== 'string') return ''
+  const trimmed = url.trim()
+  const match = trimmed.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/) || trimmed.match(/([A-Za-z0-9_-]{11})$/)
+  return match ? match[1] : ''
+}
+
 const getNextIndex = () => {
   if (!playlistSongs.value.length) return -1
   return (currIndex + 1) % playlistSongs.value.length
@@ -157,7 +167,7 @@ const getPrevIndex = () => {
   return (currIndex - 1 + playlistSongs.value.length) % playlistSongs.value.length
 }
 
-const getLyrics = async (method) => {
+const getLyrics = async (method, signal) => {
       let lyricsLoc = []
 
       const parse = (response) => {
@@ -187,20 +197,22 @@ const getLyrics = async (method) => {
         try {
           console.log('SENT LYRICS')
           if (duration === undefined) {
-            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName)}&track_name=${encode(songName)}`))
+            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName)}&track_name=${encode(songName)}`, {signal}))
           } else {
-            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName)}&track_name=${encode(songName)}&duration=${duration}`))
+            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName)}&track_name=${encode(songName)}&duration=${duration}`, {signal}))
           }
         } catch (error) {
+          if (error.name === 'CanceledError') return false
           try {
-            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName).substring(0, encode(artistName).indexOf("%", encode(artistName).indexOf("%") + 1))}&track_name=${encode(songName)}&duration=${duration}`))
+            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName).substring(0, encode(artistName).indexOf("%", encode(artistName).indexOf("%") + 1))}&track_name=${encode(songName)}&duration=${duration}`, {signal}))
           } catch (error) {
+            if (error.name === 'CanceledError') return false
             // const agent = new https.Agent({
             //   rejectUnauthorized: false,
             // });
             
             try {
-              const response = await axios.get(`https://api.textyl.co/api/lyrics?q=${apiUrl}`, {insecureHTTPParser: true})
+              const response = await axios.get(`https://api.textyl.co/api/lyrics?q=${apiUrl}`, {insecureHTTPParser: true, signal})
               const lyricsLoc2 = response.data
       
               lyricsLoc2.forEach((lyric) => lyric.seconds = `${lyric.seconds}.00`)
@@ -208,6 +220,7 @@ const getLyrics = async (method) => {
               console.log('SENT LYRICS FALLBACK')
               return {lyrics: lyricsLoc2, fallback: true}
             } catch (error) {
+              if (error.name === 'CanceledError') return false
               console.log('NO LYRICS FOUND', error)
               return false
             }
@@ -251,15 +264,10 @@ const togglePlaylistVisible = () => {
 }
 
 const toggleInputsVisible = () => {
-  if (inputsVisible.value === false) {
-    inputsVisible.value = true
-    inputWrapper.value.style.height = '90vh'
-    return inputsVisibleImg.value.classList.toggle('active')
-  }
-  inputsVisible.value = false
-  inputsVisibleImg.value.classList.remove('active')
-  inputWrapper.value.style.height = '0px'
-} 
+  inputsVisible.value = !inputsVisible.value
+  if (!inputWrapper.value) return
+  inputWrapper.value.style.height = inputsVisible.value ? '90vh' : '0px'
+}
 
 const updateApiUrl = () => {
   apiUrl = ''
@@ -306,7 +314,9 @@ const updatePlayer = async (id) => {
     }
   })
 
-  songData.value.style.backgroundImage = `url(https://img.youtube.com/vi/${id}/maxresdefault.jpg)`
+  if (songData.value) {
+    songData.value.style.backgroundImage = `url(https://img.youtube.com/vi/${id}/maxresdefault.jpg)`
+  }
   coverSrc.value = `https://img.youtube.com/vi/${id}/maxresdefault.jpg`
   extractImageColor(coverSrc.value)
 }
@@ -324,15 +334,19 @@ const playPlaylistSong = async (i, el) => {
   activeIndex.value = i
   currIndex = i
 
+  const requestId = ++currentRequestId.value
+
   const song = playlistSongs.value[i]
 
   await updatePlayer(song.url)
+
+  if (currentRequestId.value !== requestId) return
 
   words = song.title
   artists = song.author
 
   updateApiUrl()
-  await updateLyrics()
+  await updateLyrics(requestId)
 
   if (el) {
     setImgAttribute('pause', el)
@@ -391,8 +405,9 @@ const playlistAction = (state, i) => {
 }
 
 const animateTimeSlider = () => {
+  if (!currentTimeSlider.value) return
   currentTimeSlider.value.classList.toggle('fade')
-  currentTimeSlider.value.addEventListener('animationend', (e) => currentTimeSlider.value.classList.remove('fade'))
+  currentTimeSlider.value.addEventListener('animationend', (e) => currentTimeSlider.value?.classList.remove('fade'))
 }
 
 const updateSongState = (type, e) => {  
@@ -427,11 +442,25 @@ const updateSongState = (type, e) => {
       break
     } case 'volume': {
         if (!player || typeof player.setVolume !== 'function') return
-          player.unMute()
+        if (!isMuted.value) {
           player.setVolume(currentVolume.value * 2)
-          break
+        }
+        break
        }
     }
+}
+
+const toggleMute = () => {
+  if (!player) return
+  
+  if (isMuted.value) {
+    player.unMute()
+    player.setVolume(currentVolume.value * 2)
+  } else {
+    player.mute()
+  }
+  
+  isMuted.value = !isMuted.value
 }
 
 const updateArrays = () => {
@@ -444,13 +473,20 @@ const updateArrays = () => {
   } catch (e) {console.log(e)}
 }
 
-const updateLyrics = async (type) => {
+const updateLyrics = async (requestId, type) => {
+  if (lyricsAbortController) {
+    lyricsAbortController.abort()
+  }
+  lyricsAbortController = new AbortController()
+  
   lyrics = undefined
   afterLyrics.value = []
   beforeLyrics.value = []
   
   try {
     updateArrays()
+    
+    if (currentRequestId.value !== requestId) return
     
     if (type !== 'single') {
       const parsed = cleanArtistSongFromTitle(
@@ -465,7 +501,10 @@ const updateLyrics = async (type) => {
       duration = undefined
     }
 
-    const response = await getLyrics((artistName === '' || songName === '') ? 'single' : type)
+    const response = await getLyrics((artistName === '' || songName === '') ? 'single' : type, lyricsAbortController.signal)
+
+    if (currentRequestId.value !== requestId) return
+    if (!response) return
 
     if (lyrics === undefined) {
       if (response.fallback !== true) {  
@@ -496,7 +535,9 @@ const updateLyrics = async (type) => {
       }
 
       timeSliderInterval = setInterval(() => {
-        currentTimeSlider.value.style.left = `${(Math.round(player.getCurrentTime()) / Math.round(player.getDuration())) * 100}%`
+        if (currentTimeSlider.value) {
+          currentTimeSlider.value.style.left = `${(Math.round(player.getCurrentTime()) / Math.round(player.getDuration())) * 100}%`
+        }
         animateTimeSlider()
       }, 3000)
     }
@@ -576,12 +617,25 @@ const handleInput = async (type, queue) => {
   words = []
 
   if (type ===  'playlist') {
+    playlistStatus.value = 'Fetching playlist...'
     try {
+      if (!playlistUrl.value.trim()) {
+        playlistStatus.value = 'Please enter a valid playlist URL'
+        setTimeout(() => { playlistStatus.value = '' }, 3000)
+        return
+      }
+
       const response = await axios.post(`https://syncedlyrics.vercel.app/api/playlist`, {
           url: `${playlistUrl.value}`
       })
       
       const newSongs = response.data.songs || []
+
+      if (!newSongs || newSongs.length === 0) {
+        playlistStatus.value = 'No songs found in playlist'
+        setTimeout(() => { playlistStatus.value = '' }, 3000)
+        return
+      }
 
       newSongs.forEach(song => {
         const exists = playlistSongs.value.some(
@@ -593,9 +647,16 @@ const handleInput = async (type, queue) => {
         }
       })
 
-    togglePlaylistVisible()
-    toggleInputsVisible()
-    } catch (e) {console.log(e)}
+      playlistStatus.value = `Loaded ${newSongs.length} songs`
+      setTimeout(() => { playlistStatus.value = '' }, 2000)
+
+      togglePlaylistVisible()
+      toggleInputsVisible()
+    } catch (e) {
+      console.log(e)
+      playlistStatus.value = 'Failed to load playlist. Check the URL and try again.'
+      setTimeout(() => { playlistStatus.value = '' }, 3000)
+    }
   } else {
     words = song.value
     artists = artist.value
@@ -604,21 +665,28 @@ const handleInput = async (type, queue) => {
 
     toggleInputsVisible()
 
-    if (queue === true) {
-      const videoId = songUrlInput.value.split('=')[1]
+    const videoId = extractYouTubeVideoId(songUrlInput.value)
+    if (!videoId) {
+      console.log('Please enter a valid YouTube video URL before queueing or playing.')
+      return
+    }
 
+    if (queue === true) {
       playlistSongs.value.push({
         url: videoId,
-        title: song.value,
-        author: artist.value
+        title: song.value || 'Unknown Title',
+        author: artist.value || 'Unknown Artist'
       })
 
       return
-  } else {
+    } else {
       clearInterval(timeSliderInterval)
       clearInterval(checkInterval)
-      await updatePlayer(songUrlInput.value.split('=')[1])
-      await updateLyrics('single')
+      const requestId = ++currentRequestId.value
+      await updatePlayer(videoId)
+      if (currentRequestId.value === requestId) {
+        await updateLyrics(requestId, 'single')
+      }
     }
   }
 }
@@ -630,11 +698,24 @@ const handleInput = async (type, queue) => {
     <h1>Song Lyrics (BETA VERSION, MADE BY: SHLEV)</h1>
 
     <div id="inputwrapper" ref="inputWrapper">
-      <img src="../assets/play.png" id="inputsVisibleImg" @click="toggleInputsVisible" ref="inputsVisibleImg" class="visibleimages active">
+      <button
+        id="inputsToggleBtn"
+        type="button"
+        class="toggle-input-button"
+        :class="{ open: inputsVisible }"
+        @click="toggleInputsVisible"
+        :aria-expanded="inputsVisible"
+      >
+        <span class="toggle-icon">{{ inputsVisible ? '✕' : '➤' }}</span>
+        <span class="toggle-label">{{ inputsVisible ? 'Close inputs' : 'Show inputs' }}</span>
+      </button>
       <div id="startui" v-show="inputsVisible">
 
         <div id="inputselector">
-          <vueSelect :options="['Single', 'Playlist']" v-model="selectedInput" :on-change="updateInputs()"></vueSelect>
+          <select v-model="selectedInput" @change="updateInputs">
+            <option value="Single">Single</option>
+            <option value="Playlist">Playlist</option>
+          </select>
         </div>
 
         <div id="inputs">
@@ -656,6 +737,7 @@ const handleInput = async (type, queue) => {
               <input type="text" placeholder="Enter youtube playlist url" v-model="playlistUrl">
             </div>
             <button type="submit" class="submit">Submit</button>
+            <div v-if="playlistStatus" class="playlist-status">{{ playlistStatus }}</div>
           </form>
         </div>
         </div>
@@ -772,8 +854,9 @@ const handleInput = async (type, queue) => {
 
         <div id="newvolumediv">
           <img
-            src="../assets/volume.png"
+            :src="isMuted ? mutedImg : volumeImg"
             class="newcontrolimage"
+            @click="toggleMute"
           >
 
           <input
