@@ -571,43 +571,57 @@ const updateLyrics = async (requestId, type) => {
     const response = await getLyrics((artistName === '' || songName === '') ? 'single' : type, lyricsAbortController.signal)
 
     if (currentRequestId.value !== requestId) return
-    if (!response) return
 
-    if (lyrics === undefined) {
-      if (response.fallback !== true) {  
-        lyrics = response.lyrics
-        currArtist.value = response.artist
-        currSong.value = response.song
-      } else {
-        lyrics = response.lyrics
-        currSong.value = songName
-        currArtist.value = artistName
-      }
+    if (response === false) {
+      console.log('NO LYRICS AVAILABLE')
+      lyrics = undefined
+      currentLyricsVal.value = 'No Lyrics Found'
 
       if (type === 'single') {
-        playlistSongs.value.push({url: songUrlInput.value.split('=')[1], title: currSong.value, author: currArtist.value, duration: response.duration})
-        currIndex = playlistSongs.value.length - 1
+        currSong.value = songName || song.value || 'Unknown Title'
+        currArtist.value = artistName || artist.value || 'Unknown Artist'
+      } else {
+        currSong.value = playlistSongs.value[currIndex]?.title || ''
+        currArtist.value = playlistSongs.value[currIndex]?.author || ''
       }
 
-      if (response === false) {
-        console.log('NO LYRICS AVAILABLE')
-        lyrics = undefined
-        currSong.value = playlistSongs.value[currIndex].title
-        currArtist.value = playlistSongs.value[currIndex].author
-      }
-
-      if (timeSliderInterval) {
-        clearInterval(timeSliderInterval)
-        timeSliderInterval = null
-      }
-
-      timeSliderInterval = setInterval(() => {
-        if (currentTimeSlider.value) {
-          currentTimeSlider.value.style.left = `${(Math.round(player.getCurrentTime()) / Math.round(player.getDuration())) * 100}%`
+      if (type === 'single' && songUrlInput.value) {
+        const id = songUrlInput.value.split('=')[1]
+        if (id) {
+          playlistSongs.value.push({url: id, title: currSong.value, author: currArtist.value, duration: duration})
+          currIndex = playlistSongs.value.length - 1
         }
-        animateTimeSlider()
-      }, 3000)
+      }
+    } else {
+      if (lyrics === undefined) {
+        if (response.fallback !== true) {
+          lyrics = response.lyrics
+          currArtist.value = response.artist
+          currSong.value = response.song
+        } else {
+          lyrics = response.lyrics
+          currSong.value = songName
+          currArtist.value = artistName
+        }
+
+        if (type === 'single') {
+          playlistSongs.value.push({url: songUrlInput.value.split('=')[1], title: currSong.value, author: currArtist.value, duration: response.duration})
+          currIndex = playlistSongs.value.length - 1
+        }
+      }
     }
+
+    if (timeSliderInterval) {
+      clearInterval(timeSliderInterval)
+      timeSliderInterval = null
+    }
+
+    timeSliderInterval = setInterval(() => {
+      if (currentTimeSlider.value) {
+        currentTimeSlider.value.style.left = `${(Math.round(player.getCurrentTime()) / Math.round(player.getDuration())) * 100}%`
+      }
+      animateTimeSlider()
+    }, 3000)
           
     checkInterval = setInterval(() => {
       try {
