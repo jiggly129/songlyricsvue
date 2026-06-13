@@ -37,6 +37,7 @@
     "youtube-dl-exec": "^3.0.20",
     "youtube-player": "^5.6.0",
     "youtube-playlist": "^1.0.4",
+    "youtube-sr": "^4.3.12",
     "youtubei": "^1.7.0",
     "youtubei.js": "^17.0.1",
     "ytpl": "^2.3.0"

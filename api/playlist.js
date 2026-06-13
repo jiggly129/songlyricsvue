@@ -1,3 +1,93 @@
+// import {Innertube} from 'youtubei.js'
+// // import SpotifyWebApi from 'spotify-web-api-node';
+
+// // const spotifyApi = new SpotifyWebApi()
+
+// const allowedOrigins = [
+//   'http://localhost:5173',
+//   'https://localhost',
+// ]
+
+// export default async function getPlaylist(req, res) {
+//   const origin = req.headers.origin
+
+//   if (allowedOrigins.includes(origin)) {
+//     res.setHeader('Access-Control-Allow-Origin', origin)
+//   }
+
+//   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+//   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+
+//   if (req.method === 'OPTIONS') {
+//     return res.status(200).end()
+//   }
+  
+//   try {
+//     console.log(req.body)
+
+//     if (!req.body?.url) {
+//       return res.status(400).json({
+//         error: 'Missing url',
+//         body: req.body
+//       })
+//     }
+
+//     const timeoutPromise = new Promise((_, reject) => 
+//       setTimeout(() => reject(new Error('Playlist fetch timeout')), 15000)
+//     )
+
+//     const fetchPlaylist = async () => {
+//       const youtube = await Innertube.create();
+//       const playlistId = new URL(req.body.url).searchParams.get('list')
+
+//       let response = await youtube.getPlaylist(playlistId)
+
+//       res.json({
+//         debug: {
+//           playlistId,
+//           title: response.title,
+//           videoCount: response.video_count,
+//           itemCount: response.items.length,
+//           hasContinuation: response.has_continuation,
+//           keys: Object.keys(response)
+  
+//         }
+//       })
+
+//       const items = [...response.items]
+
+//       while (response.has_continuation) {
+//         const next = await response.getContinuation()
+//         next.items.forEach((item) => items.push(item))
+        
+//         response = next
+        
+//         if (response.has_continuation === false) {
+//           break
+//         }
+//       }
+  
+//       const data = {songs: []}
+
+//       items.forEach((item) => {
+//           data.songs.push({url: item.id, title: item.title.text, author: item.author.name, duration: item.duration.seconds})
+//       })
+
+//       return data
+//     }
+
+//     const data = await Promise.race([fetchPlaylist(), timeoutPromise])
+//     res.json(data)
+//     console.log('SENT PlAYLIST')
+//   } catch (error) {
+//       console.log(error)
+//       res.status(400).json({
+//         error: 'Failed to fetch playlist. Please check the URL and try again.',
+//         details: error.message
+//       })
+//   }
+// }
+
 import {Innertube} from 'youtubei.js'
 // import SpotifyWebApi from 'spotify-web-api-node';
 
@@ -8,8 +98,10 @@ const allowedOrigins = [
   'https://localhost',
 ]
 
-export default async function getPlaylist(req, res) {
-  const origin = req.headers.origin
+import YouTube from "youtube-sr";
+
+export default async function extractPlaylistSongs(req) {
+   const origin = req.headers.origin
 
   if (allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin)
@@ -21,69 +113,17 @@ export default async function getPlaylist(req, res) {
   if (req.method === 'OPTIONS') {
     return res.status(200).end()
   }
-  
-  try {
-    console.log(req.body)
+  const playlist = await YouTube.getPlaylist(req.body.url);
 
-    if (!req.body?.url) {
-      return res.status(400).json({
-        error: 'Missing url',
-        body: req.body
-      })
-    }
+  const videos = await playlist.fetch();
 
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Playlist fetch timeout')), 15000)
-    )
+  const songs = videos.map(video => ({
+    title: video.title,
+    id: video.id,
+    url: `https://www.youtube.com/watch?v=${video.id}`
+  }));
 
-    const fetchPlaylist = async () => {
-      const youtube = await Innertube.create();
-      const playlistId = new URL(req.body.url).searchParams.get('list')
+  res.json({songs})
 
-      let response = await youtube.getPlaylist(playlistId)
-
-      res.json({
-        debug: {
-          playlistId,
-          title: response.title,
-          videoCount: response.video_count,
-          itemCount: response.items.length,
-          hasContinuation: response.has_continuation,
-          keys: Object.keys(response)
-  
-        }
-      })
-
-      const items = [...response.items]
-
-      while (response.has_continuation) {
-        const next = await response.getContinuation()
-        next.items.forEach((item) => items.push(item))
-        
-        response = next
-        
-        if (response.has_continuation === false) {
-          break
-        }
-      }
-  
-      const data = {songs: []}
-
-      items.forEach((item) => {
-          data.songs.push({url: item.id, title: item.title.text, author: item.author.name, duration: item.duration.seconds})
-      })
-
-      return data
-    }
-
-    const data = await Promise.race([fetchPlaylist(), timeoutPromise])
-    res.json(data)
-    console.log('SENT PlAYLIST')
-  } catch (error) {
-      console.log(error)
-      res.status(400).json({
-        error: 'Failed to fetch playlist. Please check the URL and try again.',
-        details: error.message
-      })
-  }
+  console.log(songs);
 }
