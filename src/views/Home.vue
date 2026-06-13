@@ -709,6 +709,8 @@ const handleInput = async (type, queue) => {
       const response = await axios.post(`https://syncedlyrics.vercel.app/api/playlist`, {
           url: `${playlistUrl.value}`
       })
+
+      console.log(response.data)
       
       const newSongs = response.data.songs || []
 
@@ -717,6 +719,8 @@ const handleInput = async (type, queue) => {
         setTimeout(() => { playlistStatus.value = '' }, 3000)
         return
       }
+
+      console.log('Hello')
 
       newSongs.forEach(song => {
         const exists = playlistSongs.value.some(

@@ -38,8 +38,19 @@ export default async function getPlaylist(req, res) {
 
     const fetchPlaylist = async () => {
       const youtube = await Innertube.create();
-      let response = await youtube.getPlaylist(req.body.url.split('=')[1])
-      
+      const playlistId = new URL(req.body.url).searchParams.get('list')
+
+      let response = await youtube.getPlaylist(playlistId)
+
+      res.json({
+        debug: {
+          playlistId,
+          title: response.title,
+          videoCount: response.video_count,
+          itemsReturned: response.items.length
+        }
+      })
+
       const items = [...response.items]
 
       while (response.has_continuation) {
@@ -52,7 +63,7 @@ export default async function getPlaylist(req, res) {
           break
         }
       }
-      
+  
       const data = {songs: []}
 
       items.forEach((item) => {
