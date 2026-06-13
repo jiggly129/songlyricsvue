@@ -47,7 +47,10 @@ export default async function getPlaylist(req, res) {
           playlistId,
           title: response.title,
           videoCount: response.video_count,
-          itemsReturned: response.items.length
+          itemCount: response.items.length,
+          hasContinuation: response.has_continuation,
+          keys: Object.keys(response)
+  
         }
       })
 
