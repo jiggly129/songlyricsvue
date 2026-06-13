@@ -1,4 +1,4 @@
-import YouTube from "youtube-sr";
+import { Playlist } from "youtube-sr";
 
 const allowedOrigins = [
   'http://localhost:5173',
@@ -39,7 +39,7 @@ export default async function getPlaylist(req, res) {
       return res.status(400).json({ error: "Invalid playlist URL" });
     }
 
-    const playlist = await YouTube.getPlaylist(playlistId, { fetchAll: true });
+    const playlist = await Playlist.get(playlistId);
 
     const videos = await playlist.fetch();
 
