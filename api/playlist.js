@@ -127,7 +127,19 @@ export default async function getPlaylist(req, res) {
       return res.status(400).json({ error: "Missing playlist URL" });
     }
 
-    const playlist = await YouTube.getPlaylist(url);
+    function extractPlaylistId(url) {
+      const match = url.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+      return match ? match[1] : null;
+    }
+
+    const playlistId = extractPlaylistId(url);
+
+    if (!playlistId) {
+      return res.status(400).json({ error: "Invalid playlist URL" });
+    }
+
+    const playlist = await YouTube.getPlaylist(playlistId);
+    
     const videos = await playlist.fetch();
 
     const songs = videos.map(video => ({
