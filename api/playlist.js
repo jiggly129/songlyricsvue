@@ -95,6 +95,8 @@ import {Innertube} from 'youtubei.js'
 
 import YouTube from "youtube-sr";
 
+import { YouTube } from "youtube-sr";
+
 const allowedOrigins = [
   'http://localhost:5173',
   'https://localhost',
@@ -138,8 +140,8 @@ export default async function getPlaylist(req, res) {
       return res.status(400).json({ error: "Invalid playlist URL" });
     }
 
-    const playlist = await YouTube.getPlaylist(playlistId);
-    
+    const playlist = await YouTube.getPlaylist(playlistId, { fetchAll: true });
+
     const videos = await playlist.fetch();
 
     const songs = videos.map(video => ({
