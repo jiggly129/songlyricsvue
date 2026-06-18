@@ -16,67 +16,64 @@ async function getYT() {
 
 export default async function handler(req, res) {
   try {
-    const origin = req.headers.origin;
+    const { url } = req.body || {};
 
-    if (origin && allowedOrigins.includes(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-    } else {
-      res.setHeader("Access-Control-Allow-Origin", "*");
+    if (!url) {
+      return res.status(400).json({ error: "Missing URL" });
     }
 
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "POST, OPTIONS"
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type"
-    );
-
-    if (req.method === "OPTIONS") {
-      return res.status(204).end();
-    }
-
-    if (req.method !== "POST") {
-      return res.status(405).json({
-        error: "Method not allowed",
-      });
-    }
-
-    const { url } = req.body;
-
-    const playlistId =
-      url.match(/[?&]list=([a-zA-Z0-9_-]+)/)?.[1];
+    const playlistId = url.match(/[?&]list=([a-zA-Z0-9_-]+)/)?.[1];
 
     if (!playlistId) {
-      return res.status(400).json({
-        error: "Invalid playlist URL",
+      return res.status(400).json({ error: "Invalid playlist URL" });
+    }
+
+    const response = await fetch(
+      `https://www.youtube.com/playlist?list=${playlistId}`
+    );
+
+    const html = await response.text();
+
+    // Extract JSON from ytInitialData
+    const match = html.match(/var ytInitialData = (.*?);\s*<\/script>/);
+
+    if (!match) {
+      return res.status(500).json({
+        error: "Failed to parse playlist"
       });
     }
 
-    const youtube = await getYT();
+    const data = JSON.parse(match[1]);
 
-    const playlist = await youtube.getPlaylist(playlistId);
+    const videos =
+      data.contents
+        ?.twoColumnBrowseResultsRenderer
+        ?.tabs?.[0]
+        ?.tabRenderer
+        ?.content
+        ?.sectionListRenderer
+        ?.contents?.[0]
+        ?.itemSectionRenderer
+        ?.contents?.[0]
+        ?.playlistVideoListRenderer
+        ?.contents || [];
 
-    const songs = playlist.items.map(video => ({
-      title: video.title.text,
-      id: video.id,
-      url: `https://www.youtube.com/watch?v=${video.id}`,
-    }));
+    const songs = videos
+      .map(v => v.playlistVideoRenderer)
+      .filter(Boolean)
+      .map(v => ({
+        title: v.title?.runs?.[0]?.text,
+        id: v.videoId,
+        url: `https://www.youtube.com/watch?v=${v.videoId}`
+      }));
 
-    return res.json({
-      playlist: {
-        title: playlist.info.title,
-        author: playlist.info.author?.name ?? null,
-      },
-      songs,
+    return res.status(200).json({
+      songs
     });
 
-  } catch (e) {
-    console.error(e);
-
+  } catch (err) {
     return res.status(500).json({
-      error: e.message,
+      error: err.message
     });
   }
 }
