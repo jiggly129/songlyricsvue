@@ -37,17 +37,15 @@ export default async function getPlaylist(req, res) {
     if (!playlistId) {
       return res.status(400).json({ error: "Invalid playlist URL" });
     }
+    
+    const playlist = await YouTube.getPlaylist(playlistId);
 
-       const videos = await YouTube.search({
-      query: playlistId,
-      type: "video",
-      limit: 50,
-    });
+    await playlist.fetch();
 
-    const songs = videos.map(video => ({
+    const songs = playlist.videos.map(video => ({
       title: video.title,
       id: video.id,
-      url: `https://www.youtube.com/watch?v=${video.id}`,
+      url: video.url,
     }));
 
     return res.status(200).json({ songs });
