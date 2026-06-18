@@ -15,6 +15,14 @@ async function getYT() {
 }
 
 export default async function handler(req, res) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+    if (req.method === "OPTIONS") {
+      return res.status(204).end();
+    }
+
   try {
     const { url } = req.body || {};
 
@@ -29,7 +37,12 @@ export default async function handler(req, res) {
     }
 
     const response = await fetch(
-      `https://www.youtube.com/playlist?list=${playlistId}`
+      `https://www.youtube.com/playlist?list=${playlistId}`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0"
+        }
+      }
     );
 
     const html = await response.text();
