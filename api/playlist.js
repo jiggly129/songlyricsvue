@@ -1,3 +1,40 @@
+import { Innertube } from 'youtubei.js'
+
+let youtube
+
+async function getYouTube() {
+  if (!youtube) {
+    youtube = await Innertube.create()
+  }
+
+  return youtube
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      error: 'Method not allowed'
+    })
+  }
+
+  try {
+    const { url } = req.body || {}
+
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({
+        error: 'Missing playlist URL'
+      })
+    }
+
+    const match = url.match(/[?&]list=([a-zA-Z0-9_-]+)/)
+
+    if (!match) {
+      return res.status(400).json({
+        error: 'Invalid YouTube playlist URL'
+      })
+    }
+
+    const playlistId = match[1]
 
     const yt = await getYouTube()
     const playlist = await yt.getPlaylist(playlistId)
