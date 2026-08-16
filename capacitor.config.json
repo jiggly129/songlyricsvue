@@ -1,5 +1,5 @@
 {
-  "appId": "com.example.app",
-  "appName": "songlyricsvue",
+  "appId": "com.songlyrics.app",
+  "appName": "Song Lyrics",
   "webDir": "dist"
 }

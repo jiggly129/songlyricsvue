@@ -1,5 +1,5 @@
 <script setup>
-import {ref} from 'vue'
+import {ref, computed} from 'vue'
 import axios from 'axios'
 import { encode } from 'ascii-url-encoder';
 import playImg from '@/assets/play.png'
@@ -7,10 +7,6 @@ import pauseImg from '@/assets/pause.png'
 import volumeImg from '@/assets/volume.png'
 import mutedImg from '@/assets/muted.png'
 import { useMagicKeys } from '@vueuse/core'
-// import https from 'https'
-// import { Client, MusicClient } from "youtubei";
-
-// const youtube = new Client()
  
 let lyrics
 let player
@@ -27,6 +23,8 @@ let duration
 let loop = false
 let shuffle = false
 let isSwitchingSong = false
+let lyricsAbortController = null
+let lyricsSynced = false
 const artist = ref('')
 const song = ref('')
 const currentLyricsVal = ref('')
@@ -61,9 +59,41 @@ const progressPercent = ref(0)
 const lyricsColor = ref('#ffffff')
 const currentRequestId = ref(0)
 const playlistStatus = ref('')
-let lyricsAbortController = null
+const isFetchingLyrics = ref(false)
+const playlistSearch = ref('')
 
 const {space} = useMagicKeys()
+
+const isSpotifyPlaylist = (url) => {
+  if (!url) return false
+
+  return /^https?:\/\/open\.spotify\.com\/playlist\/[A-Za-z0-9]+/i.test(
+    url.trim()
+  )
+}
+
+const filteredPlaylistSongs = computed(() => {
+  const query = playlistSearch.value.trim().toLowerCase()
+
+  if (!query) {
+    return playlistSongs.value.map((song, index) => ({
+      song,
+      originalIndex: index
+    }))
+  }
+
+  return playlistSongs.value
+    .map((song, index) => ({
+      song,
+      originalIndex: index
+    }))
+    .filter(({ song }) => {
+      const title = (song.title || '').toLowerCase()
+      const author = (song.author || '').toLowerCase()
+
+      return title.includes(query) || author.includes(query)
+    })
+})
 
 const extractImageColor = (imageUrl) => {
   const img = new Image()
@@ -166,24 +196,33 @@ const sanitizeArtistName = (rawArtist) => {
 }
 
 const cleanArtistSongFromTitle = (title) => {
-  if (!title) return { artist: '', song: '' }
-
-  let [artistPart, songPart] = title.split('-')
-
-  if (!songPart) {
-    return { artist: '', song: title }
+  if (!title || typeof title !== 'string') {
+    return {
+      artist: '',
+      song: ''
+    }
   }
 
-  const cleanedArtist = sanitizeArtistName(artistPart)
-
-  const cleanedSong = songPart
-    .trim()
+  let cleaned = title
     .replace(/\[.*?\]|\(.*?\)/g, '')
+    .replace(/\s+/g, ' ')
     .trim()
+
+  // Artist - Song
+  const separatorMatch = cleaned.match(
+    /^(.+?)\s+[-–—]\s+(.+)$/
+  )
+
+  if (separatorMatch) {
+    return {
+      artist: sanitizeArtistName(separatorMatch[1]),
+      song: separatorMatch[2].trim()
+    }
+  }
 
   return {
-    artist: cleanedArtist,
-    song: cleanedSong
+    artist: '',
+    song: cleaned
   }
 }
 
@@ -192,6 +231,88 @@ const extractYouTubeVideoId = (url) => {
   const trimmed = url.trim()
   const match = trimmed.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/) || trimmed.match(/([A-Za-z0-9_-]{11})$/)
   return match ? match[1] : ''
+}
+
+const isYouTubeUrl = (url) => {
+  if (!url || typeof url !== 'string') return false
+
+  try {
+    const parsed = new URL(url.trim())
+    const host = parsed.hostname.toLowerCase()
+
+    // youtube.com, www.youtube.com, music.youtube.com
+    if (
+      host === 'youtube.com' ||
+      host === 'www.youtube.com' ||
+      host === 'music.youtube.com'
+    ) {
+      // Normal watch URL
+      if (
+        parsed.pathname === '/watch' &&
+        parsed.searchParams.has('v')
+      ) {
+        return true
+      }
+
+      // Shorts
+      if (/^\/shorts\/[A-Za-z0-9_-]{11}$/.test(parsed.pathname)) {
+        return true
+      }
+
+      // Embed
+      if (/^\/embed\/[A-Za-z0-9_-]{11}$/.test(parsed.pathname)) {
+        return true
+      }
+    }
+
+    // youtu.be/VIDEO_ID
+    if (host === 'youtu.be') {
+      return /^\/[A-Za-z0-9_-]{11}$/.test(parsed.pathname)
+    }
+
+    return false
+  } catch {
+    return false
+  }
+}
+
+const isSpotifyTrackUrl = (url) => {
+  if (!url || typeof url !== 'string') return false
+
+  try {
+    const parsed = new URL(url.trim())
+
+    return (
+      parsed.hostname === 'open.spotify.com' &&
+      /^\/track\/[A-Za-z0-9]+$/.test(parsed.pathname)
+    )
+  } catch {
+    return false
+  }
+}
+
+const extractSpotifyTrackId = (url) => {
+  if (!url || typeof url !== 'string') return ''
+
+  try {
+    const parsed = new URL(url.trim())
+
+    if (parsed.hostname !== 'open.spotify.com') return ''
+
+    const match = parsed.pathname.match(
+      /^\/track\/([A-Za-z0-9]+)$/
+    )
+
+    return match ? match[1] : ''
+  } catch {
+    return ''
+  }
+}
+
+const getSongUrlType = (url) => {
+  if (isYouTubeUrl(url)) return 'youtube'
+  if (isSpotifyTrackUrl(url)) return 'spotify'
+  return null
 }
 
 const getNextIndex = () => {
@@ -205,66 +326,173 @@ const getPrevIndex = () => {
 }
 
 const getLyrics = async (method, signal) => {
-      let lyricsLoc = []
+  const lyricsLoc = []
 
-      const parse = (response) => {
-        if (response.data.syncedLyrics === null) {
-          return false
-        } 
+  const parse = (response) => {
+    const data = response.data
 
-        response.data.syncedLyrics.split('\n').forEach((line, i) => {
-          lyricsLoc.push({
-              seconds: (parseInt(line.split(']')[0].substring(1,3)) * 60) + parseInt(line.split(']')[0].substring(4,6)) + (parseInt(line.split(']')[0].substring(7,9)) / 100),
-              lyrics: line.substring(11, line.length)
-          })
+    if (data?.syncedLyrics) {
+      lyricsLoc.length = 0
+
+      data.syncedLyrics.split('\n').forEach((line) => {
+        const match = line.match(
+          /^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/
+        )
+
+        if (!match) return
+
+        const minutes = Number(match[1])
+        const seconds = Number(match[2])
+        const text = match[3]
+
+        lyricsLoc.push({
+          seconds: minutes * 60 + seconds,
+          lyrics: text
+        })
+      })
+
+      return {
+        song: data.trackName,
+        artist: data.artistName,
+        lyrics: [...lyricsLoc],
+        synced: true,
+        fallback: false,
+        duration: data.duration
+      }
+    }
+
+    if (data?.plainLyrics) {
+      const plainLines = data.plainLyrics
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line !== '')
+
+      const plainLyrics = plainLines.map(line => ({
+        lyrics: line
+      }))
+
+      return {
+        song: data.trackName,
+        artist: data.artistName,
+        lyrics: plainLyrics,
+        synced: false,
+        fallback: false,
+        duration: data.duration
+      }
+    }
+
+    return false
+  }
+
+  if (
+    method === 'single' &&
+    encode(artistName) === '' &&
+    encode(songName) === ''
+  ) {
+  } else {
+    const artistCandidates = []
+
+    const addArtistCandidate = (value) => {
+      if (!value) return
+
+      const cleaned = value.trim()
+
+      if (
+        cleaned &&
+        !artistCandidates.some(
+          candidate => candidate.toLowerCase() === cleaned.toLowerCase()
+        )
+      ) {
+        artistCandidates.push(cleaned)
+      }
+    }
+
+    addArtistCandidate(artistName)
+
+    if (artistName.includes('-')) {
+      const parts = artistName.split(/\s*[-–—]\s*/)
+
+      parts.forEach(part => {
+        addArtistCandidate(part)
+      })
+    }
+
+    console.log('Trying lyric artists:', artistCandidates)
+
+    for (const artistCandidate of artistCandidates) {
+      if (signal?.aborted) return false
+
+      try {
+        const params = new URLSearchParams({
+          artist_name: artistCandidate,
+          track_name: songName
         })
 
-        return {
-          song: response.data.trackName,
-          artist: response.data.artistName,
-          lyrics: lyricsLoc,
-          fallback: false,
-          duration: response.data.duration
+        if (duration !== undefined) {
+          params.append('duration', duration)
         }
+
+        console.log(
+          `Trying LRCLIB: "${artistCandidate}" - "${songName}"`
+        )
+
+        const response = await axios.get(
+          `https://lrclib.net/api/get?${params.toString()}`,
+          { signal }
+        )
+
+        const result = parse(response)
+
+        if (result !== false) {
+          console.log(
+            `Lyrics found using artist: "${artistCandidate}"`
+          )
+
+          return result
+        }
+      } catch (error) {
+        if (error.name === 'CanceledError') {
+          return false
+        }
+
+        console.log(
+          `LRCLIB failed for artist "${artistCandidate}"`,
+          error
+        )
+      }
+    }
+
+    try {
+      const response = await axios.get(
+        `https://api.textyl.co/api/lyrics?q=${apiUrl}`,
+        {
+          insecureHTTPParser: true,
+          signal
+        }
+      )
+
+      const lyricsLoc2 = response.data
+
+      lyricsLoc2.forEach(
+        lyric => lyric.seconds = `${lyric.seconds}.00`
+      )
+
+      console.log('SENT LYRICS FALLBACK')
+
+      return {
+        lyrics: lyricsLoc2,
+        fallback: true
+      }
+    } catch (error) {
+      if (error.name === 'CanceledError') {
+        return false
       }
 
-      if (method === 'single' && encode(artistName) === '' && encode(songName) === '') {
-        // YOUTUBE API
-      } else {
-        try {
-          console.log('SENT LYRICS')
-          if (duration === undefined) {
-            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName)}&track_name=${encode(songName)}`, {signal}))
-          } else {
-            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName)}&track_name=${encode(songName)}&duration=${duration}`, {signal}))
-          }
-        } catch (error) {
-          if (error.name === 'CanceledError') return false
-          try {
-            return parse(await axios.get(`https://lrclib.net/api/get?artist_name=${encode(artistName).substring(0, encode(artistName).indexOf("%", encode(artistName).indexOf("%") + 1))}&track_name=${encode(songName)}&duration=${duration}`, {signal}))
-          } catch (error) {
-            if (error.name === 'CanceledError') return false
-            // const agent = new https.Agent({
-            //   rejectUnauthorized: false,
-            // });
-            
-            try {
-              const response = await axios.get(`https://api.textyl.co/api/lyrics?q=${apiUrl}`, {insecureHTTPParser: true, signal})
-              const lyricsLoc2 = response.data
-      
-              lyricsLoc2.forEach((lyric) => lyric.seconds = `${lyric.seconds}.00`)
-              
-              console.log('SENT LYRICS FALLBACK')
-              return {lyrics: lyricsLoc2, fallback: true}
-            } catch (error) {
-              if (error.name === 'CanceledError') return false
-              console.log('NO LYRICS FOUND', error)
-              return false
-            }
-          } 
-        }
-      }
+      console.log('NO LYRICS FOUND', error)
+      return false
+    }
   }
+}
 
 function loadYouTubeAPI() {
   return new Promise((resolve) => {
@@ -308,19 +536,49 @@ const toggleInputsVisible = () => {
 
 const updateApiUrl = () => {
   apiUrl = ''
-  
-  try {
-    artists = Array.isArray(artists) ? artists.join(' ') : artists
-    artists = sanitizeArtistName(artists)
-    artists = artists.replace(/[\(\[][^^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi, '').match((/(\b[^\s]+\b)/g))
-    words = Array.isArray(words) ? words.join(' ') : words
-    words = words.replace(/[\(\[][^\)\]]*[\)\]]/g, '').match((/(\b[^\s]+\b)/g))
 
-    artists.forEach((artist) => apiUrl += ` ${artist}`)
-    words.forEach((word) => apiUrl += ` ${word}`)
+  try {
+    let artistWords = Array.isArray(artists)
+      ? artists.join(' ')
+      : (artists || '')
+
+    let songWords = Array.isArray(words)
+      ? words.join(' ')
+      : (words || '')
+
+    artistWords = sanitizeArtistName(artistWords)
+
+    artistWords = artistWords
+      .replace(
+        /[\(\[][^\)\]]*[\)\]]|(?:\s*(?:ft\.?|feat\.?|&).*?)$/gi,
+        ''
+      )
+
+    songWords = songWords.replace(
+      /[\(\[][^\)\]]*[\)\]]/g,
+      ''
+    )
+
+    const artistMatches =
+      artistWords.match(/\b[^\s]+\b/g) || []
+
+    const songMatches =
+      songWords.match(/\b[^\s]+\b/g) || []
+
+    artistMatches.forEach((artist) => {
+      apiUrl += ` ${artist}`
+    })
+
+    songMatches.forEach((word) => {
+      apiUrl += ` ${word}`
+    })
 
     apiUrl = encode(apiUrl)
-  } catch (e) {console.log(e)}
+
+  } catch (e) {
+    console.log('updateApiUrl error:', e)
+    apiUrl = ''
+  }
 }
 
 const updateInputs = () => {
@@ -341,7 +599,6 @@ const updatePlayer = async (id) => {
 
   const YT = await loadYouTubeAPI()
 
-  // Create the player and wait for onReady so we can read the duration
   await new Promise((resolve) => {
     player = new YT.Player(songEmbed.value, {
       height: '360',
@@ -352,10 +609,9 @@ const updatePlayer = async (id) => {
           try {
             player.playVideo()
             player.setVolume(currentVolume.value * 2)
-            songStateImg.value.setAttribute('src', pauseImg)
+            songStateImg.value.src = pauseImg
             timeBarIndicatorStyles.value.left = `0%`
 
-            // capture duration (some players may return 0 initially)
             duration = Math.round(player.getDuration() || 0)
 
             if (!duration || duration === 0) {
@@ -390,32 +646,110 @@ const setImgAttribute = (type, img) => {
   img.setAttribute('src', pauseImg)
 }
 
-const playPlaylistSong = async (i, el) => {
-  if (!playlistSongs.value[i]) return
+const playPlaylistSong = async (i) => {
+  const song = playlistSongs.value[i]
+
+  if (!song) return
 
   activeIndex.value = i
   currIndex = i
 
   const requestId = ++currentRequestId.value
 
-  const song = playlistSongs.value[i]
+  console.log('Playlist song selected:', song)
 
-  await updatePlayer(song.url)
+  let videoId =
+    song.videoId ||
+    song.id ||
+    extractYouTubeVideoId(song.url)
+
+  if (!videoId && isSpotifyTrackUrl(song.url)) {
+    try {
+      console.log('Converting Spotify track to YouTube:', song.url)
+
+      const spotifySong = await getSpotifySong(song.url)
+
+      if (currentRequestId.value !== requestId) return
+
+      if (!spotifySong?.videoId) {
+        console.error(
+          'Could not find YouTube video for Spotify song:',
+          song
+        )
+
+        currentLyricsVal.value = 'YouTube video not found'
+        return
+      }
+
+      videoId = spotifySong.videoId
+
+      song.videoId = videoId
+
+      if (spotifySong.title) {
+        song.title = spotifySong.title
+      }
+
+      if (spotifySong.artist) {
+        song.author = spotifySong.artist
+      }
+
+      if (spotifySong.duration) {
+        song.duration = spotifySong.duration
+      }
+
+    } catch (error) {
+      console.error(
+        'Failed to convert Spotify playlist song:',
+        error
+      )
+
+      currentLyricsVal.value = 'Failed to load Spotify song'
+      return
+    }
+  }
+
+  if (!videoId) {
+    console.error(
+      'No playable YouTube video found for playlist item:',
+      song
+    )
+
+    currentLyricsVal.value = 'Unable to play song'
+    return
+  }
+
+  console.log('Playing YouTube video:', videoId)
+
+  currSong.value =
+    song.title || 'Unknown Title'
+
+  currArtist.value =
+    song.author || 'Unknown Artist'
+
+  artists = song.author || ''
+  words = song.title || ''
+
+  duration = song.duration || undefined
+
+  clearInterval(checkInterval)
+  clearInterval(timeSliderInterval)
+
+  await updatePlayer(videoId)
 
   if (currentRequestId.value !== requestId) return
 
-  words = song.title
-  artists = song.author
+  await updateLyrics(
+    requestId,
+    'playlist'
+  )
 
-  updateApiUrl()
-  await updateLyrics(requestId)
+  if (currentRequestId.value !== requestId) return
 
-  if (el) {
-    setImgAttribute('pause', el)
-  }
+  const playlistItem =
+    playlistSongsParent.value?.children?.[i]
 
-  if (playlistSongsParent.value?.children?.[i]) {
-    playlistSongsParent.value.children[i].scrollIntoView({
+  if (playlistItem) {
+    playlistItem.scrollIntoView({
       behavior: 'smooth',
       block: 'center'
     })
@@ -534,45 +868,119 @@ const updateArrays = () => {
   artistName = ''
   songName = ''
 
-  try {
-    artists.forEach((artist) => artistName += ` ${artist}`)
-    words.forEach((word) => songName += ` ${word}`)
-  } catch (e) {console.log(e)}
+  if (Array.isArray(artists)) {
+    artistName = artists.join(' ')
+  } else if (typeof artists === 'string') {
+    artistName = artists
+  }
+
+  if (Array.isArray(words)) {
+    songName = words.join(' ')
+  } else if (typeof words === 'string') {
+    songName = words
+  }
+
+  artistName = artistName.trim()
+  songName = songName.trim()
+
+  let depth = 0
+  let splitIndex = -1
+
+  for (let i = 0; i < songName.length; i++) {
+    const char = songName[i]
+
+    if (char === '(' || char === '[') {
+      depth++
+      continue
+    }
+
+    if (char === ')' || char === ']') {
+      depth = Math.max(0, depth - 1)
+      continue
+    }
+
+    if (
+      depth === 0 &&
+      (char === '-' || char === '–' || char === '—') &&
+      i > 0 &&
+      i < songName.length - 1
+    ) {
+      const before = songName[i - 1]
+      const after = songName[i + 1]
+
+      if (/\s/.test(before) && /\s/.test(after)) {
+        splitIndex = i
+        break
+      }
+    }
+  }
+
+  if (splitIndex !== -1) {
+    artistName = songName.slice(0, splitIndex).trim()
+    songName = songName.slice(splitIndex + 1).trim()
+  }
+
+  artistName = artistName
+    .replace(/\[.*?\]|\(.*?\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  songName = songName
+    .replace(/\[.*?\]|\(.*?\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 const updateLyrics = async (requestId, type) => {
+  isFetchingLyrics.value = true
+  currentLyricsVal.value = 'Fetching lyrics...'
+
   if (lyricsAbortController) {
     lyricsAbortController.abort()
   }
+
   lyricsAbortController = new AbortController()
-  
+
   lyrics = undefined
   afterLyrics.value = []
   beforeLyrics.value = []
-  
-  try {
-    updateArrays()
-    
-    if (currentRequestId.value !== requestId) return
-    
-    if (type !== 'single') {
-      const parsed = cleanArtistSongFromTitle(
-      playlistSongs.value[currIndex].title
-    )
 
-    artists = parsed.artist
-    words = parsed.song
-      
-      duration = playlistSongs.value[currIndex].duration
-    } else {
-      duration = undefined
+  try {
+    if (currentRequestId.value !== requestId) return
+
+    if (type === 'playlist') {
+      const currentSong = playlistSongs.value[currIndex]
+
+      if (!currentSong) {
+        console.error('No current playlist song')
+        return
+      }
+
+      artists = currentSong.author || ''
+      words = currentSong.title || ''
+
+      duration = currentSong.duration || undefined
+
+      console.log('Lyrics search:', {
+        artist: artists,
+        song: words,
+        duration
+      })
     }
 
-    const response = await getLyrics((artistName === '' || songName === '') ? 'single' : type, lyricsAbortController.signal)
+    updateArrays()
+
+    if (currentRequestId.value !== requestId) return
+
+    const response = await getLyrics(
+      (artistName === '' || songName === '') ? 'single' : type,
+      lyricsAbortController.signal
+    )
 
     if (currentRequestId.value !== requestId) return
 
     if (response === false) {
+      isFetchingLyrics.value = false
       console.log('NO LYRICS AVAILABLE')
       lyrics = undefined
       currentLyricsVal.value = 'No Lyrics Found'
@@ -593,20 +1001,34 @@ const updateLyrics = async (requestId, type) => {
         }
       }
     } else {
+      isFetchingLyrics.value = false
+
       if (lyrics === undefined) {
+        lyrics = response.lyrics
+
+        lyricsSynced = response.synced === true
+
         if (response.fallback !== true) {
-          lyrics = response.lyrics
           currArtist.value = response.artist
           currSong.value = response.song
         } else {
-          lyrics = response.lyrics
           currSong.value = songName
           currArtist.value = artistName
         }
 
         if (type === 'single') {
-          playlistSongs.value.push({url: songUrlInput.value.split('=')[1], title: currSong.value, author: currArtist.value, duration: response.duration})
+          playlistSongs.value.push({
+            url: songUrlInput.value,
+            videoId: songUrlInput.value.includes('spotify.com')
+              ? null
+              : extractYouTubeVideoId(songUrlInput.value),
+            title: currSong.value,
+            author: currArtist.value,
+            duration: response.duration
+          })
+
           currIndex = playlistSongs.value.length - 1
+          activeIndex.value = currIndex
         }
       }
     }
@@ -637,30 +1059,60 @@ const updateLyrics = async (requestId, type) => {
 
       if (lyrics === undefined) {
         currentLyricsVal.value = 'No Lyrics Found'
-      } else {
-        if (currTime.value < Math.round(lyrics[0].seconds) && afterLyrics.value.length === 0) {
+      } else if (!lyricsSynced) {
+    
+        if (beforeLyrics.value.length === 0 && afterLyrics.value.length === 0) {
           currentLyricsVal.value = ''
-          for (let i4 = 0; i4 < lyrics.length; i4++) { afterLyrics.value.push(lyrics[i4])}
+
+          afterLyrics.value = [...lyrics]
+        }
+
+      } else {
+
+        if (
+          lyrics.length > 0 &&
+          currTime.value < Math.round(lyrics[0].seconds) &&
+          afterLyrics.value.length === 0
+        ) {
+          currentLyricsVal.value = ''
+
+          for (let i4 = 0; i4 < lyrics.length; i4++) {
+            afterLyrics.value.push(lyrics[i4])
+          }
         }
 
         let previousCurrentLyrics
 
         lyrics.forEach((lyric, i) => {
           if (player.getPlayerState() !== 2) {
-              if (parseInt(lyric.seconds).toFixed(1) === player.getCurrentTime().toFixed(1) && previousCurrentLyrics !== lyric.seconds) {
-                previousCurrentLyrics = lyric.seconds
-                currentLyricsVal.value = lyric.lyrics
-                afterLyrics.value = []
-                beforeLyrics.value = []
-                  
-                if (i !== 0) {
-                  for (let i2 = 0; i2 < i; i2++) { beforeLyrics.value.push(lyrics[i2]);}
+            if (
+              parseInt(lyric.seconds).toFixed(1) ===
+              player.getCurrentTime().toFixed(1) &&
+              previousCurrentLyrics !== lyric.seconds
+            ) {
+              previousCurrentLyrics = lyric.seconds
+
+              currentLyricsVal.value = lyric.lyrics
+
+              afterLyrics.value = []
+              beforeLyrics.value = []
+
+              if (i !== 0) {
+                for (let i2 = 0; i2 < i; i2++) {
+                  beforeLyrics.value.push(lyrics[i2])
                 }
-                for (let i3 = i + 1; i3 < lyrics.length; i3++) { afterLyrics.value.push(lyrics[i3]) }
-                  
-                currentLyrics.value.scrollIntoView({behavior: 'smooth', block: 'center'})
+              }
+
+              for (let i3 = i + 1; i3 < lyrics.length; i3++) {
+                afterLyrics.value.push(lyrics[i3])
+              }
+
+              currentLyrics.value?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center'
+              })
             }
-          } 
+          }
         })
       }
 
@@ -669,15 +1121,39 @@ const updateLyrics = async (requestId, type) => {
 
         if (loop === true) {
           player.seekTo(0)
-          isSwitchingSong = false
+          player.playVideo()
+
+          setTimeout(() => {
+            isSwitchingSong = false
+          }, 500)
+
           return
         }
 
-        if (playlistSongs.value.length) {
+        if (playlistSongs.value.length === 1) {
+          player.seekTo(0)
+          player.playVideo()
+
+          setTimeout(() => {
+            isSwitchingSong = false
+          }, 500)
+
+          return
+        }
+
+        if (playlistSongs.value.length > 1) {
           if (shuffle) {
-            const randomIndex = Math.floor(
+            let randomIndex = Math.floor(
               Math.random() * playlistSongs.value.length
             )
+
+            if (playlistSongs.value.length > 1) {
+              while (randomIndex === currIndex) {
+                randomIndex = Math.floor(
+                  Math.random() * playlistSongs.value.length
+                )
+              }
+            }
 
             playPlaylistSong(randomIndex)
           } else {
@@ -690,37 +1166,89 @@ const updateLyrics = async (requestId, type) => {
         }, 1000)
       }
     },100)
-  } catch (e) {console.log(e)}
+  } catch (e) {
+    isFetchingLyrics.value = false
+    console.log(e)
+  }
+}
+
+const getSpotifySong = async (url) => {
+  const response = await axios.post('/api/spotifysong', {
+    url
+  })
+
+  return response.data
+}
+
+const findPlaylistSongIndex = (videoId, title = '', artist = '') => {
+  return playlistSongs.value.findIndex(song => {
+    const songVideoId =
+      song.videoId ||
+      song.id ||
+      extractYouTubeVideoId(song.url)
+
+    if (songVideoId && songVideoId === videoId) {
+      return true
+    }
+
+    const sameTitle =
+      title &&
+      song.title &&
+      song.title.toLowerCase().trim() === title.toLowerCase().trim()
+
+    const sameArtist =
+      artist &&
+      song.author &&
+      song.author.toLowerCase().trim() === artist.toLowerCase().trim()
+
+    return sameTitle && sameArtist
+  })
 }
 
 const handleInput = async (type, queue) => {
   artists = []
   words = []
 
-  if (type ===  'playlist') {
+  if (type === 'playlist') {
     playlistStatus.value = 'Fetching playlist...'
+
     try {
       if (!playlistUrl.value.trim()) {
         playlistStatus.value = 'Please enter a valid playlist URL'
-        setTimeout(() => { playlistStatus.value = '' }, 3000)
+        setTimeout(() => {
+          playlistStatus.value = ''
+        }, 3000)
         return
       }
 
-      const response = await axios.post(`https://syncedlyrics.vercel.app/api/playlist`, {
-          url: `${playlistUrl.value}`
+      const playlistInput = playlistUrl.value.trim()
+
+      const isSpotify =
+        /^https?:\/\/open\.spotify\.com\/playlist\//i.test(
+          playlistInput
+        )
+
+      const endpoint = isSpotify
+        ? '/api/spotify-playlist'
+        : '/api/playlist'
+
+      const response = await axios.post(endpoint, {
+        url: playlistInput
       })
 
       console.log(response.data)
-      
+
       const newSongs = response.data.songs || []
 
-      if (!newSongs || newSongs.length === 0) {
+      if (newSongs.length === 0) {
         playlistStatus.value = 'No songs found in playlist'
-        setTimeout(() => { playlistStatus.value = '' }, 3000)
+
+        setTimeout(() => {
+          playlistStatus.value = ''
+        }, 3000)
+
         return
       }
-
-      console.log('Hello')
 
       newSongs.forEach(song => {
         const exists = playlistSongs.value.some(
@@ -733,62 +1261,310 @@ const handleInput = async (type, queue) => {
       })
 
       playlistStatus.value = `Loaded ${newSongs.length} songs`
-      setTimeout(() => { playlistStatus.value = '' }, 2000)
+
+      setTimeout(() => {
+        playlistStatus.value = ''
+      }, 2000)
 
       togglePlaylistVisible()
       toggleInputsVisible()
-    } catch (e) {
-      console.log(e)
-      playlistStatus.value = 'Failed to load playlist. Check the URL and try again.'
-      setTimeout(() => { playlistStatus.value = '' }, 3000)
-    }
-  } else {
-    words = song.value
-    artists = artist.value
 
-    // If artist and song are not provided, try to fetch them from YouTube oEmbed
-    if ((!artists || artists.trim() === '') && (!words || words.trim() === '') && songUrlInput && songUrlInput.value) {
+    } catch (e) {
+      console.error('Playlist error:', e)
+
+      playlistStatus.value =
+        'Failed to load playlist. Check the URL and try again.'
+
+      setTimeout(() => {
+        playlistStatus.value = ''
+      }, 3000)
+    }
+
+    return
+  }
+
+  const inputUrl = songUrlInput.value.trim()
+
+  if (!inputUrl) {
+    console.log('Please enter a YouTube or Spotify track URL.')
+    return
+  }
+
+  const urlType = getSongUrlType(inputUrl)
+
+  if (!urlType) {
+    console.log(
+      'Please enter a valid YouTube or Spotify track URL.'
+    )
+    return
+  }
+
+  artists =
+    typeof artist.value === 'string'
+      ? artist.value.trim()
+      : ''
+
+  words =
+    typeof song.value === 'string'
+      ? song.value.trim()
+      : ''
+
+  if (urlType === 'youtube') {
+
+    const videoId = extractYouTubeVideoId(inputUrl)
+
+    if (!videoId) {
+      console.log('Could not extract YouTube video ID')
+      return
+    }
+    if (!artists || !words) {
       try {
-        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(songUrlInput.value)}&format=json`
-        const resp = await axios.get(oembedUrl)
-        if (resp && resp.data && resp.data.title) {
-          const parsed = cleanArtistSongFromTitle(resp.data.title)
-          artists = parsed.artist || ''
-          words = parsed.song || ''
+        const response = await axios.post(
+          '/api/youtube-song',
+          {
+            url: inputUrl
+          }
+        )
+
+        console.log(
+          'YouTube metadata:',
+          response.data
+        )
+
+        if (!artists) {
+          artists = response.data.artist || ''
         }
+
+        if (!words) {
+          words = response.data.title || ''
+        }
+
       } catch (e) {
-        // ignore oEmbed failures and fall back to user input
-        console.log('oEmbed fetch failed or invalid URL', e)
+        console.error(
+          'Failed to get YouTube metadata:',
+          e
+        )
       }
     }
 
-    updateApiUrl()
+    // ---------------------------------
+    // Make sure they're strings
+    // ---------------------------------
+
+    artists = artists || ''
+    words = words || ''
+
+    artistName = artists
+    songName = words
+
+    currArtist.value =
+      artists || 'Unknown Artist'
+
+    currSong.value =
+      words || 'Unknown Title'
+
+    // ---------------------------------
+    // Lyrics search URL
+    // ---------------------------------
+
+    if (artists && words) {
+      updateApiUrl()
+    } else {
+      apiUrl = ''
+    }
 
     toggleInputsVisible()
 
-    const videoId = extractYouTubeVideoId(songUrlInput.value)
-    if (!videoId) {
-      console.log('Please enter a valid YouTube video URL before queueing or playing.')
+    // ---------------------------------
+    // Queue
+    // ---------------------------------
+
+    if (queue === true) {
+
+      playlistSongs.value.push({
+        url: videoId,
+        title: words || 'Unknown Title',
+        author: artists || 'Unknown Artist'
+      })
+
+      console.log(
+        'YouTube song added to queue:',
+        {
+          videoId,
+          title: words,
+          artist: artists
+        }
+      )
+
       return
     }
+
+    clearInterval(timeSliderInterval)
+    clearInterval(checkInterval)
+
+    const requestId =
+    ++currentRequestId.value
+
+    const playlistIndex = findPlaylistSongIndex(
+      videoId,
+      words,
+      artists
+    )
+
+    if (playlistIndex !== -1) {
+      activeIndex.value = playlistIndex
+      currIndex = playlistIndex
+    } else {
+      activeIndex.value = null
+    }
+
+    await updatePlayer(videoId)
+
+    if (
+      currentRequestId.value === requestId
+    ) {
+      await updateLyrics(
+        requestId,
+        'single'
+      )
+    }
+
+    return
+  }
+
+  if (urlType === 'spotify') {
+
+    console.log(
+      'Fetching Spotify metadata...'
+    )
+
+    let spotifySong
+
+    try {
+      spotifySong =
+        await getSpotifySong(inputUrl)
+    } catch (e) {
+      console.error(
+        'Spotify request failed:',
+        e
+      )
+
+      currentLyricsVal.value =
+        'Failed to load Spotify song'
+
+      return
+    }
+
+    if (!spotifySong) {
+      console.log(
+        'No Spotify song returned'
+      )
+      return
+    }
+
+    console.log(
+      'Spotify → YouTube:',
+      spotifySong
+    )
+
+    if (!spotifySong.videoId) {
+      console.log(
+        'No YouTube video found'
+      )
+
+      currentLyricsVal.value =
+        'YouTube video not found'
+
+      return
+    }
+
+    artists =
+      spotifySong.artist || ''
+
+    words =
+      spotifySong.title || ''
+
+    artistName =
+      artists
+
+    songName =
+      words
+
+    currArtist.value =
+      artists || 'Unknown Artist'
+
+    currSong.value =
+      words || 'Unknown Title'
+
+    // ---------------------------------
+    // Update lyrics API URL
+    // ---------------------------------
+
+    if (artists && words) {
+      updateApiUrl()
+    } else {
+      apiUrl = ''
+    }
+
+    toggleInputsVisible()
+
+    // ---------------------------------
+    // Queue Spotify song
+    // ---------------------------------
 
     if (queue === true) {
       playlistSongs.value.push({
-        url: videoId,
-        title: words || song.value || 'Unknown Title',
-        author: artists || artist.value || 'Unknown Artist'
+        url: spotifySong.videoId,
+        title: words || 'Unknown Title',
+        author: artists || 'Unknown Artist',
+        duration: spotifySong.duration || null
       })
 
+      console.log(
+        'Spotify → YouTube song added to queue:',
+        {
+          videoId: spotifySong.videoId,
+          title: words,
+          artist: artists
+        }
+      )
+
       return
-    } else {
-      clearInterval(timeSliderInterval)
-      clearInterval(checkInterval)
-      const requestId = ++currentRequestId.value
-      await updatePlayer(videoId)
-      if (currentRequestId.value === requestId) {
-        await updateLyrics(requestId, 'single')
-      }
     }
+
+    clearInterval(timeSliderInterval)
+    clearInterval(checkInterval)
+
+   const requestId =
+        ++currentRequestId.value
+
+    const playlistIndex = findPlaylistSongIndex(
+      spotifySong.videoId,
+      spotifySong.title,
+      spotifySong.artist
+    )
+
+    if (playlistIndex !== -1) {
+      activeIndex.value = playlistIndex
+      currIndex = playlistIndex
+    } else {
+      activeIndex.value = null
+    }
+
+    await updatePlayer(
+      spotifySong.videoId
+    )
+
+    if (
+      currentRequestId.value === requestId
+    ) {
+      await updateLyrics(
+        requestId,
+        'single'
+      )
+    }
+
+    return
   }
 }
 
@@ -824,7 +1600,7 @@ const handleInput = async (type, queue) => {
             <div class="inputs">
               <input type="text" placeholder="Enter artist name (Optional)" v-model="artist">
               <input type="text" placeholder="Enter song name (Optional)" v-model="song">
-              <input type="text" placeholder="Enter song url" v-model="songUrlInput">
+              <input type="text" placeholder="Enter youtube or spotify song url" v-model="songUrlInput">
             </div>
 
             <div id="buttonsdiv">
@@ -835,7 +1611,7 @@ const handleInput = async (type, queue) => {
 
           <form @submit.prevent="handleInput('playlist')" v-show="visibleOptions.playlist" id="playlistinputdiv" class="inputdiv">
             <div class="inputs">
-              <input type="text" placeholder="Enter youtube playlist url" v-model="playlistUrl">
+              <input type="text" placeholder="Enter YouTube or Spotify playlist URL" v-model="playlistUrl">
             </div>
             <button type="submit" class="submit">Submit</button>
             <div v-if="playlistStatus" class="playlist-status">{{ playlistStatus }}</div>
@@ -850,22 +1626,41 @@ const handleInput = async (type, queue) => {
 
       <div class="playlist-panel" :class="{ open: playlistVisible }">
 
-        <div class="playlist-header"><p>Playlist</p></div>
+        <div class="playlist-header">
+          <p>Playlist</p>
+
+          <input
+            v-model="playlistSearch"
+            type="text"
+            class="playlist-search"
+            placeholder="Search songs or artists..."
+          />
+        </div>
 
         <div class="playlist-body" ref="playlistSongsParent">
 
-          <div v-for="(song, i) in playlistSongs" :key="song.url" class="playlist-item" :class="{ active: i === activeIndex }">
+          <div
+            v-for="item in filteredPlaylistSongs"
+            :key="item.song.url"
+            class="playlist-item"
+            :class="{ active: item.originalIndex === activeIndex }"
+          >
 
             <div class="playlist-text">
-              <p class="playlist-title">{{ song.title }}</p>
-              <p class="playlist-author">{{ song.author }}</p>
+              <p class="playlist-title">{{ item.song.title }}</p>
+              <p class="playlist-author">{{ item.song.author }}</p>
             </div>
 
             <div class="playlist-buttons">
 
-              <img src="../assets/play.png" class="playlist-icon" @click="playPlaylistSong(i, $event.currentTarget)" id="playplaylistsong"/>
+              <img
+                  :src="item.originalIndex === activeIndex ? pauseImg : playImg"
+                  class="playlist-icon"
+                  @click="playPlaylistSong(item.originalIndex)"
+                  id="playplaylistsong"
+                />
 
-              <img src="../assets/remove.png" class="playlist-icon" @click="playlistAction('remove', i)" />
+              <img src="../assets/remove.png" class="playlist-icon" @click="playlistAction('remove', item.originalIndex)" />
 
             </div>
 
@@ -880,6 +1675,11 @@ const handleInput = async (type, queue) => {
         <div id="songEmbed" ref="songEmbed" v-show="false"></div>
       
         <div id="lyrics">
+           <div v-if="lyrics && !lyricsSynced" class="unsynced-lyrics-box">
+              <div class="unsynced-lyrics-title">
+                Unsynced Lyrics
+              </div>
+            </div>
           <div id="previouslyrics" class="lyricsdiv">
             <p class="lyric" v-for="(lyric, i) in beforeLyrics" :key="i">{{ lyric.lyrics }}</p>
           </div>

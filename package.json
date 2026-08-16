@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "cap:sync": "npm run build && npx cap sync",
+    "cap:open": "npx cap open android",
+    "cap:run": "npx cap run android",
+    "start": "node app.js"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.4",
@@ -17,15 +21,18 @@
     "@vueuse/components": "^13.3.0",
     "@vueuse/core": "^13.1.0",
     "ascii-url-encoder": "^1.2.0",
-    "axios": "^1.9.0",
-    "cors": "^2.8.5",
+    "axios": "^1.19.0",
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.6",
     "express": "^5.2.1",
     "http-proxy-middleware": "^3.0.5",
     "i": "^0.3.7",
+    "isomorphic-unfetch": "^4.0.2",
     "jsesc": "^3.1.0",
     "nodemon": "^3.1.14",
     "npm": "^11.3.0",
     "puppeteer-core": "^24.3.0",
+    "spotify-url-info": "^3.3.2",
     "spotify-web-api-node": "^5.0.2",
     "typl": "^0.3.0",
     "vite-plugin-fs": "^0.4.4",
@@ -39,7 +46,7 @@
     "youtube-playlist": "^1.0.4",
     "youtube-sr": "^4.3.12",
     "youtubei": "^1.7.0",
-    "youtubei.js": "^17.0.1",
+    "youtubei.js": "^17.2.0",
     "ytpl": "^2.3.0"
   },
   "devDependencies": {
