@@ -1229,7 +1229,7 @@ const handleInput = async (type, queue) => {
         )
 
       const endpoint = isSpotify
-        ? '/api/spotify-playlist'
+        ? '/api/playlist'
         : '/api/playlist'
 
       const response = await axios.post(endpoint, {
