@@ -10,7 +10,7 @@
     "cap:sync": "npm run build && npx cap sync",
     "cap:open": "npx cap open android",
     "cap:run": "npx cap run android",
-    "start": "node app.js"
+    "start": "node server/playlist.js"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.4",
