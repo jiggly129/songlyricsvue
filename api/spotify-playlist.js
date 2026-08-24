@@ -33,11 +33,11 @@ export default async function handler(req, res) {
       headless: true
     })
 
-    const page = await browser.newPage()
-
-    await page.setViewportSize({
-      width: 1280,
-      height: 900
+    const page = await browser.newPage({
+      viewport: {
+        width: 1280,
+        height: 900
+      }
     })
 
     await page.goto(url, {
@@ -53,21 +53,14 @@ export default async function handler(req, res) {
       console.log('Timed out waiting for Spotify tracks')
     }
 
-    console.log('Page URL:', page.url())
-    console.log('Page title:', await page.title())
+    await page.waitForTimeout(1000)
 
-    console.log(
-      'Initial track links:',
-      await page.locator('a[href*="/track/"]').count()
-    )
+    const songs = new Map()
 
-    const songs = await page.evaluate(async () => {
-      const delay = (ms) =>
-        new Promise(resolve => setTimeout(resolve, ms))
+    const collectTracks = async () => {
+      const tracks = await page.evaluate(() => {
+        const results = []
 
-      const songs = new Map()
-
-      const collectTracks = () => {
         const links = document.querySelectorAll(
           'a[href*="/track/"]'
         )
@@ -75,7 +68,7 @@ export default async function handler(req, res) {
         for (const link of links) {
           const trackUrl = link.href
 
-          if (!trackUrl || songs.has(trackUrl)) {
+          if (!trackUrl) {
             continue
           }
 
@@ -95,26 +88,24 @@ export default async function handler(req, res) {
             .map(line => line.trim())
             .filter(Boolean)
 
+          const artistLinks = container
+            ? [
+                ...container.querySelectorAll(
+                  'a[href*="/artist/"]'
+                )
+              ]
+            : []
+
+          let author = artistLinks
+            .map(artist => artist.innerText.trim())
+            .filter(Boolean)
+            .join(', ')
+
           const title =
             link.innerText?.trim() ||
             lines[1] ||
             lines[0] ||
             ''
-
-          let author = ''
-
-          if (container) {
-            const artistLinks = [
-              ...container.querySelectorAll(
-                'a[href*="/artist/"]'
-              )
-            ]
-
-            author = artistLinks
-              .map(artist => artist.innerText.trim())
-              .filter(Boolean)
-              .join(', ')
-          }
 
           if (!author) {
             const explicitIndex = lines.indexOf('E')
@@ -144,9 +135,10 @@ export default async function handler(req, res) {
           const id =
             trackUrl
               .split('/track/')[1]
-              ?.split('?')[0] || null
+              ?.split('?')[0] ||
+            null
 
-          songs.set(trackUrl, {
+          results.push({
             id,
             title,
             author,
@@ -154,97 +146,79 @@ export default async function handler(req, res) {
             duration
           })
         }
+
+        return results
+      })
+
+      for (const track of tracks) {
+        if (!songs.has(track.url)) {
+          songs.set(track.url, track)
+        }
       }
 
-      await delay(300)
+      return songs.size
+    }
 
-      collectTracks()
+    await collectTracks()
 
-      let stableCount = 0
-      let previousCount = songs.size
-      let previousPosition = -1
+    console.log(
+      'Initial songs found:',
+      songs.size
+    )
 
-      for (let i = 0; i < 250; i++) {
-        window.scrollBy(0, 1800)
+    let unchangedCount = 0
+    let previousCount = songs.size
 
-        await delay(200)
+    await page.mouse.move(640, 600)
 
-        collectTracks()
+    for (let i = 0; i < 500; i++) {
+      await page.mouse.wheel(0, 1200)
 
-        const currentPosition =
-          window.scrollY ||
-          document.documentElement.scrollTop ||
-          document.body.scrollTop ||
-          0
+      await page.waitForTimeout(250)
 
-        const documentHeight = Math.max(
-          document.body.scrollHeight,
-          document.documentElement.scrollHeight
-        )
+      const currentCount = await collectTracks()
 
-        const viewportHeight = window.innerHeight
+      console.log(
+        `Scroll ${i + 1}: ${currentCount} songs`
+      )
 
-        const nearBottom =
-          currentPosition + viewportHeight >=
-          documentHeight - 100
+      if (currentCount === previousCount) {
+        unchangedCount++
+      } else {
+        unchangedCount = 0
+        previousCount = currentCount
+      }
 
-        if (songs.size === previousCount) {
-          stableCount++
-        } else {
-          stableCount = 0
-          previousCount = songs.size
-        }
+      if (unchangedCount >= 12) {
+        await page.waitForTimeout(1000)
 
-        if (nearBottom) {
-          await delay(800)
-          collectTracks()
+        const finalCount = await collectTracks()
 
-          await delay(500)
-          collectTracks()
-
+        if (finalCount === previousCount) {
           break
         }
 
-        if (
-          currentPosition === previousPosition &&
-          stableCount >= 5
-        ) {
-          document.documentElement.scrollTop += 2000
-          document.body.scrollTop += 2000
-
-          await delay(300)
-
-          collectTracks()
-        }
-
-        previousPosition = currentPosition
+        previousCount = finalCount
+        unchangedCount = 0
       }
+    }
 
-      window.scrollTo(
-        0,
-        Math.max(
-          document.body.scrollHeight,
-          document.documentElement.scrollHeight
-        )
-      )
+    for (let i = 0; i < 5; i++) {
+      await page.mouse.wheel(0, 2000)
+      await page.waitForTimeout(300)
+      await collectTracks()
+    }
 
-      await delay(1000)
-
-      collectTracks()
-
-      return [...songs.values()]
-    })
-
-    console.log('Total songs found:', songs.length)
+    const result = [...songs.values()]
 
     console.log(
-      'First 5 songs:',
-      songs.slice(0, 5)
+      'Total songs found:',
+      result.length
     )
 
     return res.status(200).json({
-      count: songs.length,
-      songs
+      count: result.length,
+      songs: result
     })
 
   } catch (error) {
