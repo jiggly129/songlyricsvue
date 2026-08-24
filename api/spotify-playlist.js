@@ -156,106 +156,81 @@ export default async function handler(req, res) {
         }
       }
 
-      const getScrollContainer = () => {
-        const elements = [
-          ...document.querySelectorAll('main, div')
-        ]
-
-        const scrollable = elements
-          .filter(element => {
-            const style =
-              window.getComputedStyle(element)
-
-            return (
-              ['auto', 'scroll'].includes(
-                style.overflowY
-              ) &&
-              element.scrollHeight >
-                element.clientHeight + 100
-            )
-          })
-          .sort((a, b) => {
-            const aSize =
-              a.scrollHeight - a.clientHeight
-
-            const bSize =
-              b.scrollHeight - b.clientHeight
-
-            return bSize - aSize
-          })
-
-        return (
-          scrollable[0] ||
-          document.scrollingElement ||
-          document.documentElement
-        )
-      }
-
-      const scrollContainer =
-        getScrollContainer()
+      await delay(300)
 
       collectTracks()
 
-      let noNewTracks = 0
-      let lastCount = songs.size
+      let stableCount = 0
+      let previousCount = songs.size
+      let previousPosition = -1
 
-      for (let i = 0; i < 200; i++) {
-        const maxScroll =
-          scrollContainer.scrollHeight -
-          scrollContainer.clientHeight
+      for (let i = 0; i < 250; i++) {
+        window.scrollBy(0, 1800)
 
-        const before =
-          scrollContainer.scrollTop
-
-        const jump = Math.max(
-          scrollContainer.clientHeight * 2,
-          1500
-        )
-
-        scrollContainer.scrollTop =
-          Math.min(before + jump, maxScroll)
-
-        await delay(150)
+        await delay(200)
 
         collectTracks()
 
-        const currentCount = songs.size
+        const currentPosition =
+          window.scrollY ||
+          document.documentElement.scrollTop ||
+          document.body.scrollTop ||
+          0
 
-        const isAtBottom =
-          scrollContainer.scrollTop >= maxScroll - 5
+        const documentHeight = Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight
+        )
 
-        if (currentCount === lastCount) {
-          noNewTracks++
+        const viewportHeight = window.innerHeight
 
-          if (!isAtBottom) {
-            await delay(300)
-            collectTracks()
-          }
+        const nearBottom =
+          currentPosition + viewportHeight >=
+          documentHeight - 100
+
+        if (songs.size === previousCount) {
+          stableCount++
         } else {
-          noNewTracks = 0
-          lastCount = currentCount
+          stableCount = 0
+          previousCount = songs.size
         }
 
-        if (isAtBottom) {
-          for (let j = 0; j < 3; j++) {
-            await delay(400)
-            collectTracks()
-          }
+        if (nearBottom) {
+          await delay(800)
+          collectTracks()
+
+          await delay(500)
+          collectTracks()
 
           break
         }
 
         if (
-          scrollContainer.scrollTop === before &&
-          noNewTracks >= 3
+          currentPosition === previousPosition &&
+          stableCount >= 5
         ) {
-          window.scrollBy(0, 2000)
+          document.documentElement.scrollTop += 2000
+          document.body.scrollTop += 2000
 
-          await delay(200)
+          await delay(300)
 
           collectTracks()
         }
+
+        previousPosition = currentPosition
       }
+
+      window.scrollTo(
+        0,
+        Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight
+        )
+      )
+
+      await delay(1000)
+
+      collectTracks()
 
       return [...songs.values()]
     })

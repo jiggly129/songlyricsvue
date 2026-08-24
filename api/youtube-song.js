@@ -1,81 +1,10 @@
-import { Innertube } from 'youtubei.js'
-
-let youtubePromise = null
-
-async function getYouTube() {
-  if (!youtubePromise) {
-    youtubePromise = Innertube.create()
-  }
-
-  return youtubePromise
-}
-
-function getVideoId(input) {
-  try {
-    const parsed = new URL(input)
-
-    if (parsed.hostname === 'youtu.be') {
-      return parsed.pathname.split('/').filter(Boolean)[0] || null
-    }
-
-    const hostname = parsed.hostname.replace(/^www\./, '')
-
-    if (
-      hostname === 'youtube.com' ||
-      hostname === 'm.youtube.com' ||
-      hostname === 'music.youtube.com'
-    ) {
-      if (parsed.pathname === '/watch') {
-        return parsed.searchParams.get('v')
-      }
-
-      const parts = parsed.pathname
-        .split('/')
-        .filter(Boolean)
-
-      if (
-        ['shorts', 'embed', 'live'].includes(parts[0])
-      ) {
-        return parts[1] || null
-      }
-    }
-
-    return null
-  } catch {
-    return null
-  }
-}
-
-function cleanText(value) {
-  if (!value) return ''
-
-  if (typeof value === 'string') {
-    return value.trim()
-  }
-
-  if (typeof value.toString === 'function') {
-    return value.toString().trim()
-  }
-
-  return ''
-}
-
-function normalizeArtist(value) {
-  return cleanText(value)
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+import { chromium as playwright } from 'playwright-core'
+import chromium from '@sparticuz/chromium'
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader(
-    'Access-Control-Allow-Methods',
-    'POST, OPTIONS'
-  )
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Content-Type'
-  )
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end()
@@ -87,159 +16,279 @@ export default async function handler(req, res) {
     })
   }
 
+  const { url } = req.body || {}
+
+  if (!url) {
+    return res.status(400).json({
+      error: 'Spotify playlist URL is required'
+    })
+  }
+
+  let browser
+
   try {
-    const { url } = req.body || {}
+    browser = await playwright.launch({
+      args: chromium.args,
+      executablePath: await chromium.executablePath(),
+      headless: true
+    })
 
-    if (!url || typeof url !== 'string') {
-      return res.status(400).json({
-        error: 'YouTube URL is required'
-      })
-    }
+    const page = await browser.newPage()
 
-    const videoId = getVideoId(url)
+    await page.setViewportSize({
+      width: 1280,
+      height: 900
+    })
 
-    if (
-      !videoId ||
-      !/^[A-Za-z0-9_-]{11}$/.test(videoId)
-    ) {
-      return res.status(400).json({
-        error: 'Invalid YouTube URL'
-      })
-    }
-
-    const yt = await getYouTube()
-
-    let video
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
+    })
 
     try {
-      video = await yt.getInfo(videoId)
-    } catch (error) {
-      console.warn(
-        'getInfo failed, trying getBasicInfo:',
-        error.message
-      )
-
-      video = await yt.getBasicInfo(videoId)
+      await page.waitForSelector('a[href*="/track/"]', {
+        timeout: 15000
+      })
+    } catch {
+      console.log('Timed out waiting for Spotify tracks')
     }
 
-    const basicInfo = video?.basic_info || {}
+    console.log('Page URL:', page.url())
+    console.log('Page title:', await page.title())
 
-    const musicTracks = Array.isArray(video?.music_tracks)
-      ? video.music_tracks
-      : []
+    console.log(
+      'Initial track links:',
+      await page.locator('a[href*="/track/"]').count()
+    )
 
-    const firstMusicTrack =
-      musicTracks.find(track =>
-        track &&
-        (
-          cleanText(track.song) ||
-          cleanText(track.artist)
-        )
-      ) || null
+    const songs = await page.evaluate(async () => {
+  const delay = (ms) =>
+    new Promise(resolve => setTimeout(resolve, ms))
 
-    let title =
-      cleanText(firstMusicTrack?.song) ||
-      cleanText(basicInfo.title) ||
-      cleanText(video?.primary_info?.title)
+  const songs = new Map()
 
-    let artist =
-      normalizeArtist(firstMusicTrack?.artist) ||
-      normalizeArtist(basicInfo.author) ||
-      normalizeArtist(basicInfo.channel_name)
+  const collectTracks = () => {
+    const links = document.querySelectorAll(
+      'a[href*="/track/"]'
+    )
 
-    if (!artist) {
-      const owner =
-        video?.secondary_info?.owner ||
-        video?.secondary_info?.owner?.author
+    for (const link of links) {
+      const trackUrl = link.href
 
-      artist = normalizeArtist(
-        owner?.author?.name ||
-        owner?.name ||
-        owner
-      )
-    }
-
-    if (!firstMusicTrack && title) {
-      const separators = [
-        ' - ',
-        ' – ',
-        ' — '
-      ]
-
-      for (const separator of separators) {
-        if (!title.includes(separator)) continue
-
-        const parts = title
-          .split(separator)
-          .map(part => part.trim())
-          .filter(Boolean)
-
-        if (parts.length >= 2) {
-          const possibleArtist = parts[0]
-
-          const possibleTitle = parts
-            .slice(1)
-            .join(separator)
-
-          if (!artist) {
-            artist = possibleArtist
-          }
-
-          title = possibleTitle
-
-          break
-        }
+      if (!trackUrl || songs.has(trackUrl)) {
+        continue
       }
+
+      const container =
+        link.closest('[data-testid="tracklist-row"]') ||
+        link.closest('[role="row"]') ||
+        link.parentElement?.parentElement ||
+        link.parentElement
+
+      const text =
+        container?.innerText ||
+        link.innerText ||
+        ''
+
+      const lines = text
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+
+      const title =
+        link.innerText?.trim() ||
+        lines[1] ||
+        lines[0] ||
+        ''
+
+      let author = ''
+
+      if (container) {
+        const artistLinks = [
+          ...container.querySelectorAll(
+            'a[href*="/artist/"]'
+          )
+        ]
+
+        author = artistLinks
+          .map(artist => artist.innerText.trim())
+          .filter(Boolean)
+          .join(', ')
+      }
+
+      if (!author) {
+        const explicitIndex = lines.indexOf('E')
+
+        author =
+          explicitIndex !== -1
+            ? lines[explicitIndex + 1] || ''
+            : lines[2] || ''
+      }
+
+      const durationText =
+        lines.find(line =>
+          /^\d+:\d{1,2}$/.test(line)
+        ) || ''
+
+      let duration = null
+
+      const durationMatch =
+        durationText.match(/^(\d+):(\d{1,2})$/)
+
+      if (durationMatch) {
+        duration =
+          Number(durationMatch[1]) * 60 +
+          Number(durationMatch[2])
+      }
+
+      const id =
+        trackUrl
+          .split('/track/')[1]
+          ?.split('?')[0] || null
+
+      songs.set(trackUrl, {
+        id,
+        title,
+        author,
+        url: trackUrl,
+        duration
+      })
+    }
+  }
+
+  const getScrollContainer = () => {
+    const elements = [
+      ...document.querySelectorAll('main, div')
+    ]
+
+    const scrollable = elements
+      .filter(element => {
+        const style = window.getComputedStyle(element)
+
+        return (
+          ['auto', 'scroll'].includes(style.overflowY) &&
+          element.scrollHeight > element.clientHeight + 100
+        )
+      })
+      .sort(
+        (a, b) =>
+          b.scrollHeight - b.clientHeight -
+          (a.scrollHeight - a.clientHeight)
+      )
+
+    return scrollable[0] || document.scrollingElement
+  }
+
+  const scrollContainer = getScrollContainer()
+
+  console.log('Scroll container:', {
+    tag: scrollContainer?.tagName,
+    scrollHeight: scrollContainer?.scrollHeight,
+    clientHeight: scrollContainer?.clientHeight
+  })
+
+  collectTracks()
+
+  let lastScrollTop = -1
+  let bottomStableCount = 0
+
+  for (let i = 0; i < 300; i++) {
+    const beforeScrollTop = scrollContainer.scrollTop
+
+    scrollContainer.scrollBy({
+      top: Math.max(
+        500,
+        scrollContainer.clientHeight * 0.8
+      ),
+      behavior: 'auto'
+    })
+
+    await delay(700)
+
+    collectTracks()
+
+    const currentScrollTop =
+      scrollContainer.scrollTop
+
+    const isAtBottom =
+      currentScrollTop +
+        scrollContainer.clientHeight >=
+      scrollContainer.scrollHeight - 5
+
+    console.log({
+      iteration: i,
+      songs: songs.size,
+      scrollTop: currentScrollTop,
+      scrollHeight: scrollContainer.scrollHeight,
+      isAtBottom
+    })
+
+    if (isAtBottom) {
+      bottomStableCount++
+
+      if (bottomStableCount >= 5) {
+        break
+      }
+
+      await delay(1000)
+
+      collectTracks()
+    } else {
+      bottomStableCount = 0
     }
 
-    title = title
-      .replace(
-        /\s*\((official\s*)?(music\s*)?video\)\s*$/i,
-        ''
-      )
-      .replace(
-        /\s*\[(official\s*)?(music\s*)?video\]\s*$/i,
-        ''
-      )
-      .replace(
-        /\s*\((official\s*)?audio\)\s*$/i,
-        ''
-      )
-      .replace(
-        /\s*\[(official\s*)?audio\]\s*$/i,
-        ''
-      )
-      .trim()
+    if (
+      currentScrollTop === beforeScrollTop &&
+      currentScrollTop === lastScrollTop &&
+      i > 20
+    ) {
+      window.scrollBy(0, 800)
+
+      await delay(700)
+
+      collectTracks()
+    }
+
+    lastScrollTop = currentScrollTop
+  }
+
+  scrollContainer.scrollTop =
+    scrollContainer.scrollHeight
+
+  await delay(1500)
+
+  collectTracks()
+
+  for (let i = 0; i < 3; i++) {
+    await delay(800)
+    collectTracks()
+  }
+
+  return [...songs.values()]
+})
+
+    console.log('Total songs found:', songs.length)
+
+    console.log(
+      'First 5 songs:',
+      songs.slice(0, 5)
+    )
 
     return res.status(200).json({
-      videoId,
-      title,
-      artist,
-
-      source: firstMusicTrack
-        ? 'youtube-music-metadata'
-        : 'video-metadata',
-
-      duration:
-        typeof basicInfo.duration === 'number'
-          ? basicInfo.duration
-          : null,
-
-      channel:
-        cleanText(basicInfo.author) ||
-        cleanText(basicInfo.channel_name) ||
-        null
+      count: songs.length,
+      songs
     })
 
   } catch (error) {
-    console.error(
-      'YouTube metadata error:',
-      error
-    )
+    console.error('Spotify crawl error:', error)
 
     return res.status(500).json({
-      error: 'Failed to get YouTube metadata',
-      details: error.message
+      error: error.message
     })
+
+  } finally {
+    if (browser) {
+      await browser.close()
+    }
   }
 }
