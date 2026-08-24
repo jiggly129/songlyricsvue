@@ -1,4 +1,3 @@
-import axios from 'axios'
 import { chromium as playwright } from 'playwright-core'
 import chromium from '@sparticuz/chromium'
 
@@ -11,7 +10,13 @@ export default async function handler(req, res) {
     return res.status(200).end()
   }
 
-  const { url } = req.body
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      error: 'Method not allowed'
+    })
+  }
+
+  const { url } = req.body || {}
 
   if (!url) {
     return res.status(400).json({
@@ -30,6 +35,11 @@ export default async function handler(req, res) {
 
     const page = await browser.newPage()
 
+    await page.setViewportSize({
+      width: 1280,
+      height: 900
+    })
+
     await page.goto(url, {
       waitUntil: 'domcontentloaded',
       timeout: 30000
@@ -39,7 +49,7 @@ export default async function handler(req, res) {
       await page.waitForSelector('a[href*="/track/"]', {
         timeout: 15000
       })
-    } catch (error) {
+    } catch {
       console.log('Timed out waiting for Spotify tracks')
     }
 
@@ -47,82 +57,143 @@ export default async function handler(req, res) {
     console.log('Page title:', await page.title())
 
     console.log(
-      'Track links:',
+      'Initial track links:',
       await page.locator('a[href*="/track/"]').count()
     )
 
+    const songs = await page.evaluate(async () => {
+      const delay = (ms) =>
+        new Promise(resolve => setTimeout(resolve, ms))
+
+      const songs = new Map()
+
+      const collectTracks = () => {
+        const links = document.querySelectorAll(
+          'a[href*="/track/"]'
+        )
+
+        for (const link of links) {
+          const trackUrl = link.href
+
+          if (!trackUrl || songs.has(trackUrl)) {
+            continue
+          }
+
+          const container =
+            link.closest('[data-testid="tracklist-row"]') ||
+            link.closest('[role="row"]') ||
+            link.parentElement?.parentElement ||
+            link.parentElement
+
+          const text =
+            container?.innerText ||
+            link.innerText ||
+            ''
+
+          const lines = text
+            .split('\n')
+            .map(line => line.trim())
+            .filter(Boolean)
+
+          const title =
+            link.innerText?.trim() ||
+            lines[1] ||
+            lines[0] ||
+            ''
+
+          let author = ''
+
+          if (container) {
+            const artistLinks = [
+              ...container.querySelectorAll(
+                'a[href*="/artist/"]'
+              )
+            ]
+
+            author = artistLinks
+              .map(artist => artist.innerText.trim())
+              .filter(Boolean)
+              .join(', ')
+          }
+
+          if (!author) {
+            const explicitIndex = lines.indexOf('E')
+
+            if (explicitIndex !== -1) {
+              author = lines[explicitIndex + 1] || ''
+            } else {
+              author = lines[2] || ''
+            }
+          }
+
+          const durationText =
+            lines.find(line =>
+              /^\d+:\d{1,2}$/.test(line)
+            ) || ''
+
+          let duration = null
+
+          const durationMatch =
+            durationText.match(/^(\d+):(\d{1,2})$/)
+
+          if (durationMatch) {
+            const minutes = Number(durationMatch[1])
+            const seconds = Number(durationMatch[2])
+
+            duration = minutes * 60 + seconds
+          }
+
+          const id =
+            trackUrl
+              .split('/track/')[1]
+              ?.split('?')[0] || null
+
+          songs.set(trackUrl, {
+            id,
+            title,
+            author,
+            url: trackUrl,
+            duration
+          })
+        }
+      }
+
+      collectTracks()
+
+      let previousCount = songs.size
+      let stableCount = 0
+
+      for (let i = 0; i < 150; i++) {
+        window.scrollBy(0, 700)
+
+        await delay(500)
+
+        collectTracks()
+
+        if (songs.size === previousCount) {
+          stableCount++
+        } else {
+          stableCount = 0
+          previousCount = songs.size
+        }
+
+        if (stableCount >= 8) {
+          break
+        }
+      }
+
+      return [...songs.values()]
+    })
+
+    console.log('Total songs found:', songs.length)
+
     console.log(
-      'Track rows:',
-      await page.locator('[data-testid="tracklist-row"]').count()
+      'First 5 songs:',
+      songs.slice(0, 5)
     )
 
-    const tracks = await page.evaluate(() => {
-      const tracks = []
-      const seen = new Set()
-
-      for (const link of document.querySelectorAll('a[href*="/track/"]')) {
-        const trackUrl = link.href
-
-        if (!trackUrl || seen.has(trackUrl)) continue
-
-        seen.add(trackUrl)
-
-        const container =
-          link.closest('[data-testid="tracklist-row"]') ||
-          link.parentElement
-
-        const text = container?.innerText || ''
-
-        tracks.push({
-          spotifyUrl: trackUrl,
-          text
-        })
-      }
-
-      return tracks
-    })
-
-    const songs = tracks
-    .map((track) => {
-      const lines = track.text
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean)
-
-      const title = lines[1] || ''
-
-      const hasExplicitLabel = lines[2] === 'E'
-
-      const author = hasExplicitLabel
-        ? lines[3] || ''
-        : lines[2] || ''
-
-      const durationText =
-        lines[lines.length - 1] || ''
-
-      let duration = null
-
-      const durationMatch =
-        durationText.match(/^(\d+):(\d{1,2})$/)
-
-      if (durationMatch) {
-        const minutes = Number(durationMatch[1])
-        const seconds = Number(durationMatch[2])
-
-        duration = minutes * 60 + seconds
-      }
-
-      return {
-        id: null,
-        title,
-        author,
-        url: track.spotifyUrl,
-        duration
-      }
-    })
-    .filter(song => song.title && song.author)
-
     return res.status(200).json({
+      count: songs.length,
       songs
     })
 
