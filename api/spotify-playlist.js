@@ -35,7 +35,26 @@ export default async function handler(req, res) {
       timeout: 30000
     })
 
-    await page.waitForTimeout(3000)
+    try {
+      await page.waitForSelector('a[href*="/track/"]', {
+        timeout: 15000
+      })
+    } catch (error) {
+      console.log('Timed out waiting for Spotify tracks')
+    }
+
+    console.log('Page URL:', page.url())
+    console.log('Page title:', await page.title())
+
+    console.log(
+      'Track links:',
+      await page.locator('a[href*="/track/"]').count()
+    )
+
+    console.log(
+      'Track rows:',
+      await page.locator('[data-testid="tracklist-row"]').count()
+    )
 
     const tracks = await page.evaluate(() => {
       const tracks = []
