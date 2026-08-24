@@ -62,210 +62,203 @@ export default async function handler(req, res) {
     )
 
     const songs = await page.evaluate(async () => {
-  const delay = (ms) =>
-    new Promise(resolve => setTimeout(resolve, ms))
+      const delay = (ms) =>
+        new Promise(resolve => setTimeout(resolve, ms))
 
-  const songs = new Map()
+      const songs = new Map()
 
-  const collectTracks = () => {
-    const links = document.querySelectorAll(
-      'a[href*="/track/"]'
-    )
+      const collectTracks = () => {
+        const links = document.querySelectorAll(
+          'a[href*="/track/"]'
+        )
 
-    for (const link of links) {
-      const trackUrl = link.href
+        for (const link of links) {
+          const trackUrl = link.href
 
-      if (!trackUrl || songs.has(trackUrl)) {
-        continue
+          if (!trackUrl || songs.has(trackUrl)) {
+            continue
+          }
+
+          const container =
+            link.closest('[data-testid="tracklist-row"]') ||
+            link.closest('[role="row"]') ||
+            link.parentElement?.parentElement ||
+            link.parentElement
+
+          const text =
+            container?.innerText ||
+            link.innerText ||
+            ''
+
+          const lines = text
+            .split('\n')
+            .map(line => line.trim())
+            .filter(Boolean)
+
+          const title =
+            link.innerText?.trim() ||
+            lines[1] ||
+            lines[0] ||
+            ''
+
+          let author = ''
+
+          if (container) {
+            const artistLinks = [
+              ...container.querySelectorAll(
+                'a[href*="/artist/"]'
+              )
+            ]
+
+            author = artistLinks
+              .map(artist => artist.innerText.trim())
+              .filter(Boolean)
+              .join(', ')
+          }
+
+          if (!author) {
+            const explicitIndex = lines.indexOf('E')
+
+            author =
+              explicitIndex !== -1
+                ? lines[explicitIndex + 1] || ''
+                : lines[2] || ''
+          }
+
+          const durationText =
+            lines.find(line =>
+              /^\d+:\d{1,2}$/.test(line)
+            ) || ''
+
+          let duration = null
+
+          const durationMatch =
+            durationText.match(/^(\d+):(\d{1,2})$/)
+
+          if (durationMatch) {
+            duration =
+              Number(durationMatch[1]) * 60 +
+              Number(durationMatch[2])
+          }
+
+          const id =
+            trackUrl
+              .split('/track/')[1]
+              ?.split('?')[0] || null
+
+          songs.set(trackUrl, {
+            id,
+            title,
+            author,
+            url: trackUrl,
+            duration
+          })
+        }
       }
 
-      const container =
-        link.closest('[data-testid="tracklist-row"]') ||
-        link.closest('[role="row"]') ||
-        link.parentElement?.parentElement ||
-        link.parentElement
-
-      const text =
-        container?.innerText ||
-        link.innerText ||
-        ''
-
-      const lines = text
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean)
-
-      const title =
-        link.innerText?.trim() ||
-        lines[1] ||
-        lines[0] ||
-        ''
-
-      let author = ''
-
-      if (container) {
-        const artistLinks = [
-          ...container.querySelectorAll(
-            'a[href*="/artist/"]'
-          )
+      const getScrollContainer = () => {
+        const elements = [
+          ...document.querySelectorAll('main, div')
         ]
 
-        author = artistLinks
-          .map(artist => artist.innerText.trim())
-          .filter(Boolean)
-          .join(', ')
-      }
+        const scrollable = elements
+          .filter(element => {
+            const style =
+              window.getComputedStyle(element)
 
-      if (!author) {
-        const explicitIndex = lines.indexOf('E')
+            return (
+              ['auto', 'scroll'].includes(
+                style.overflowY
+              ) &&
+              element.scrollHeight >
+                element.clientHeight + 100
+            )
+          })
+          .sort((a, b) => {
+            const aSize =
+              a.scrollHeight - a.clientHeight
 
-        author =
-          explicitIndex !== -1
-            ? lines[explicitIndex + 1] || ''
-            : lines[2] || ''
-      }
+            const bSize =
+              b.scrollHeight - b.clientHeight
 
-      const durationText =
-        lines.find(line =>
-          /^\d+:\d{1,2}$/.test(line)
-        ) || ''
-
-      let duration = null
-
-      const durationMatch =
-        durationText.match(/^(\d+):(\d{1,2})$/)
-
-      if (durationMatch) {
-        duration =
-          Number(durationMatch[1]) * 60 +
-          Number(durationMatch[2])
-      }
-
-      const id =
-        trackUrl
-          .split('/track/')[1]
-          ?.split('?')[0] || null
-
-      songs.set(trackUrl, {
-        id,
-        title,
-        author,
-        url: trackUrl,
-        duration
-      })
-    }
-  }
-
-  const getScrollContainer = () => {
-    const elements = [
-      ...document.querySelectorAll('main, div')
-    ]
-
-    const scrollable = elements
-      .filter(element => {
-        const style = window.getComputedStyle(element)
+            return bSize - aSize
+          })
 
         return (
-          ['auto', 'scroll'].includes(style.overflowY) &&
-          element.scrollHeight > element.clientHeight + 100
+          scrollable[0] ||
+          document.scrollingElement ||
+          document.documentElement
         )
-      })
-      .sort(
-        (a, b) =>
-          b.scrollHeight - b.clientHeight -
-          (a.scrollHeight - a.clientHeight)
-      )
-
-    return scrollable[0] || document.scrollingElement
-  }
-
-  const scrollContainer = getScrollContainer()
-
-  console.log('Scroll container:', {
-    tag: scrollContainer?.tagName,
-    scrollHeight: scrollContainer?.scrollHeight,
-    clientHeight: scrollContainer?.clientHeight
-  })
-
-  collectTracks()
-
-  let lastScrollTop = -1
-  let bottomStableCount = 0
-
-  for (let i = 0; i < 300; i++) {
-    const beforeScrollTop = scrollContainer.scrollTop
-
-    scrollContainer.scrollBy({
-      top: Math.max(
-        500,
-        scrollContainer.clientHeight * 0.8
-      ),
-      behavior: 'auto'
-    })
-
-    await delay(700)
-
-    collectTracks()
-
-    const currentScrollTop =
-      scrollContainer.scrollTop
-
-    const isAtBottom =
-      currentScrollTop +
-        scrollContainer.clientHeight >=
-      scrollContainer.scrollHeight - 5
-
-    console.log({
-      iteration: i,
-      songs: songs.size,
-      scrollTop: currentScrollTop,
-      scrollHeight: scrollContainer.scrollHeight,
-      isAtBottom
-    })
-
-    if (isAtBottom) {
-      bottomStableCount++
-
-      if (bottomStableCount >= 5) {
-        break
       }
 
-      await delay(1000)
+      const scrollContainer =
+        getScrollContainer()
 
       collectTracks()
-    } else {
-      bottomStableCount = 0
-    }
 
-    if (
-      currentScrollTop === beforeScrollTop &&
-      currentScrollTop === lastScrollTop &&
-      i > 20
-    ) {
-      window.scrollBy(0, 800)
+      let noNewTracks = 0
+      let lastCount = songs.size
 
-      await delay(700)
+      for (let i = 0; i < 200; i++) {
+        const maxScroll =
+          scrollContainer.scrollHeight -
+          scrollContainer.clientHeight
 
-      collectTracks()
-    }
+        const before =
+          scrollContainer.scrollTop
 
-    lastScrollTop = currentScrollTop
-  }
+        const jump = Math.max(
+          scrollContainer.clientHeight * 2,
+          1500
+        )
 
-  scrollContainer.scrollTop =
-    scrollContainer.scrollHeight
+        scrollContainer.scrollTop =
+          Math.min(before + jump, maxScroll)
 
-  await delay(1500)
+        await delay(150)
 
-  collectTracks()
+        collectTracks()
 
-  for (let i = 0; i < 3; i++) {
-    await delay(800)
-    collectTracks()
-  }
+        const currentCount = songs.size
 
-  return [...songs.values()]
-})
+        const isAtBottom =
+          scrollContainer.scrollTop >= maxScroll - 5
+
+        if (currentCount === lastCount) {
+          noNewTracks++
+
+          if (!isAtBottom) {
+            await delay(300)
+            collectTracks()
+          }
+        } else {
+          noNewTracks = 0
+          lastCount = currentCount
+        }
+
+        if (isAtBottom) {
+          for (let j = 0; j < 3; j++) {
+            await delay(400)
+            collectTracks()
+          }
+
+          break
+        }
+
+        if (
+          scrollContainer.scrollTop === before &&
+          noNewTracks >= 3
+        ) {
+          window.scrollBy(0, 2000)
+
+          await delay(200)
+
+          collectTracks()
+        }
+      }
+
+      return [...songs.values()]
+    })
 
     console.log('Total songs found:', songs.length)
 
