@@ -1,5 +1,5 @@
 <script setup>
-import {ref, computed} from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import axios from 'axios'
 import { encode } from 'ascii-url-encoder';
 import playImg from '@/assets/play.png'
@@ -7,18 +7,17 @@ import pauseImg from '@/assets/pause.png'
 import volumeImg from '@/assets/volume.png'
 import mutedImg from '@/assets/muted.png'
 import { useMagicKeys } from '@vueuse/core'
+import InteractiveGuide from "../components/InteractiveGuide.vue";
  
 let lyrics
 let player
 let apiUrl = ''
 let artists
 let words
-let currIndex
 let artistName = ''
 let songName = ''
 let checkInterval
 let roundedPlayerFullTime
-let timeSliderInterval
 let duration
 let loop = false
 let shuffle = false
@@ -43,7 +42,6 @@ const coverSrc = ref('')
 const currArtist = ref('')
 const currSong = ref('')
 const songStateImg = ref('songStateImg')
-const currentTimeSlider = ref('currentTimeSlider')
 const playlistSongsParent = ref('playlistSongsParent')
 const currentVolume = ref(50)
 const timeBarIndicatorStyles = ref({left: 0, opacity: 0})
@@ -61,15 +59,160 @@ const currentRequestId = ref(0)
 const playlistStatus = ref('')
 const isFetchingLyrics = ref(false)
 const playlistSearch = ref('')
+const autoScroll = ref(true)
+const currentLyricIndex = ref(-1)
+const darkMode = ref(false)
+const playbackSpeed = ref(1)
+const showQueue = ref(false)
+const shuffleNextIndex = ref(null)
+const currIndex = ref(-1)
+const showGuidePrompt = ref(false);
+const showInteractiveGuide = ref(false)
 
-const {space} = useMagicKeys()
+const playbackSpeeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 
-const isSpotifyPlaylist = (url) => {
-  if (!url) return false
+const savedDarkMode = localStorage.getItem('darkMode')
 
-  return /^https?:\/\/open\.spotify\.com\/playlist\/[A-Za-z0-9]+/i.test(
-    url.trim()
+if (savedDarkMode === 'true') {
+  darkMode.value = true
+  document.documentElement.classList.add('dark-mode')
+}
+
+const {
+  space,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowDown,
+  m,
+  l,
+  s,
+  q
+} = useMagicKeys()
+
+const isTyping = () => {
+  const element = document.activeElement
+
+  if (!element) return false
+
+  return (
+    element.tagName === 'INPUT' ||
+    element.tagName === 'TEXTAREA' ||
+    element.tagName === 'SELECT' ||
+    element.isContentEditable
   )
+}
+
+watch(space, (pressed) => {
+  if (!pressed || !player || isTyping()) return
+  updateSongState('state')
+})
+
+watch(ArrowLeft, (pressed) => {
+  if (!pressed || !player || isTyping()) return
+
+  const time = Math.max(
+    0,
+    player.getCurrentTime() - 5
+  )
+
+  player.seekTo(time, true)
+})
+
+watch(ArrowRight, (pressed) => {
+  if (!pressed || !player || isTyping()) return
+
+  const time = Math.min(
+    player.getDuration(),
+    player.getCurrentTime() + 5
+  )
+
+  player.seekTo(time, true)
+})
+
+watch(ArrowUp, (pressed) => {
+  if (!pressed || isTyping()) return
+
+  currentVolume.value = Math.min(
+    100,
+    currentVolume.value + 5
+  )
+
+  updateSongState('volume')
+})
+
+watch(ArrowDown, (pressed) => {
+  if (!pressed || isTyping()) return
+
+  currentVolume.value = Math.max(
+    0,
+    currentVolume.value - 5
+  )
+
+  updateSongState('volume')
+})
+
+watch(m, (pressed) => {
+  if (pressed && !isTyping()) {
+    toggleMute()
+  }
+})
+
+watch(l, (pressed) => {
+  if (pressed && !isTyping()) {
+    updateSongState('loop')
+  }
+})
+
+watch(s, (pressed) => {
+  if (pressed && !isTyping()) {
+    updateSongState('shuffle')
+  }
+})
+
+watch(q, (pressed) => {
+  if (pressed && !isTyping()) {
+    showQueue.value = !showQueue.value
+  }
+})
+
+const setPlaybackSpeed = (speed) => {
+  playbackSpeed.value = Number(speed)
+
+  if (
+    player &&
+    typeof player.setPlaybackRate === 'function'
+  ) {
+    player.setPlaybackRate(playbackSpeed.value)
+  }
+}
+
+const toggleDarkMode = () => {
+  darkMode.value = !darkMode.value
+
+  document.documentElement.classList.toggle(
+    'dark-mode',
+    darkMode.value
+  )
+
+  localStorage.setItem(
+    'darkMode',
+    darkMode.value ? 'true' : 'false'
+  )
+}
+
+const seekToLyric = (lyric) => {
+  if (!player || !lyric) return
+
+  const timestamp = Number(lyric.seconds)
+
+  if (!Number.isFinite(timestamp)) return
+
+  player.seekTo(timestamp, true)
+
+  if (typeof player.playVideo === 'function') {
+    player.playVideo()
+  }
 }
 
 const filteredPlaylistSongs = computed(() => {
@@ -94,6 +237,94 @@ const filteredPlaylistSongs = computed(() => {
       return title.includes(query) || author.includes(query)
     })
 })
+
+const nextSong = computed(() => {
+  if (!playlistSongs.value.length) return null
+
+  const currentIndex = currIndex.value
+
+  if (shuffle) {
+    if (playlistSongs.value.length === 1) {
+      return playlistSongs.value[0]
+    }
+
+    let nextIndex = shuffleNextIndex.value
+
+    if (
+      nextIndex === null ||
+      nextIndex === currentIndex ||
+      !playlistSongs.value[nextIndex]
+    ) {
+      do {
+        nextIndex = Math.floor(
+          Math.random() * playlistSongs.value.length
+        )
+      } while (
+        playlistSongs.value.length > 1 &&
+        nextIndex === currentIndex
+      )
+
+      shuffleNextIndex.value = nextIndex
+    }
+
+    return playlistSongs.value[nextIndex]
+  }
+
+  const nextIndex =
+    (currentIndex + 1) % playlistSongs.value.length
+
+  return playlistSongs.value[nextIndex]
+})
+
+const toggleAutoScroll = async () => {
+  autoScroll.value = !autoScroll.value
+
+  if (!autoScroll.value) return
+
+  if (
+    !player ||
+    !lyricsSynced ||
+    !lyrics ||
+    currentLyricIndex.value === -1
+  ) {
+    return
+  }
+
+  await nextTick()
+
+  currentLyrics.value?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center'
+  })
+}
+
+const startGuide = () => {
+
+  showGuidePrompt.value = false
+
+  showInteractiveGuide.value = true
+
+  inputsVisible.value = false
+
+}
+
+const skipGuide = () => {
+
+  inputsVisible.value = true
+
+  showGuidePrompt.value = false
+
+}
+
+const closeInteractiveGuide = () => {
+
+  showInteractiveGuide.value = false
+   localStorage.setItem(
+    'interactiveGuideCompleted',
+    'true'
+  )
+
+}
 
 const extractImageColor = (imageUrl) => {
   const img = new Image()
@@ -317,12 +548,12 @@ const getSongUrlType = (url) => {
 
 const getNextIndex = () => {
   if (!playlistSongs.value.length) return -1
-  return (currIndex + 1) % playlistSongs.value.length
+  return (currIndex.value + 1) % playlistSongs.value.length
 }
 
 const getPrevIndex = () => {
   if (!playlistSongs.value.length) return -1
-  return (currIndex - 1 + playlistSongs.value.length) % playlistSongs.value.length
+  return (currIndex.value - 1 + playlistSongs.value.length) % playlistSongs.value.length
 }
 
 const getLyrics = async (method, signal) => {
@@ -428,8 +659,8 @@ const getLyrics = async (method, signal) => {
           track_name: songName
         })
 
-        if (duration !== undefined) {
-          params.append('duration', duration)
+        if (Number.isFinite(Number(duration)) && Number(duration) > 0) {
+          params.append('duration', String(Math.round(Number(duration))))
         }
 
         console.log(
@@ -494,6 +725,8 @@ const getLyrics = async (method, signal) => {
   }
 }
 
+
+
 function loadYouTubeAPI() {
   return new Promise((resolve) => {
     if (window.YT && window.YT.Player) {
@@ -520,7 +753,7 @@ const togglePlaylistVisible = () => {
     playlistSongs.value.length
   ) {
     setTimeout(() => {
-      const el = playlistSongsParent.value.children[currIndex]
+      const el = playlistSongsParent.value.children[currIndex.value]
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })
       }
@@ -528,10 +761,20 @@ const togglePlaylistVisible = () => {
   }
 }
 
+const openInputs = () => {
+  inputsVisible.value = true
+}
+
+const closeInputs = () => {
+  inputsVisible.value = false
+}
+
 const toggleInputsVisible = () => {
-  inputsVisible.value = !inputsVisible.value
-  if (!inputWrapper.value) return
-  inputWrapper.value.style.height = inputsVisible.value ? '90vh' : '0px'
+  if (inputsVisible.value) {
+    closeInputs()
+  } else {
+    openInputs()
+  }
 }
 
 const updateApiUrl = () => {
@@ -591,6 +834,105 @@ const updateInputs = () => {
   visibleOptions.value.playlist = false
 } 
 
+const handleGuideUndo = (action) => {
+  console.log('UNDO ACTION:', action)
+
+  switch (action) {
+    case 'close-inputs':
+    closeInputs()
+    break
+
+    case 'show-single-input':
+      selectedInput.value = 'Single'
+      updateInputs()
+      break
+
+    case 'show-playlist-input':
+      selectedInput.value = 'Playlist'
+      updateInputs()
+      break
+
+    case 'clear-song-input':
+      artist.value = ''
+      song.value = ''
+      songUrlInput.value = ''
+      break
+
+    case 'stop-and-clear':
+      if (player?.pauseVideo) {
+        player.pauseVideo()
+      }
+
+      playlistSongs.value =
+        playlistSongs.value.filter(
+          song => !song.isGuideSong
+        )
+
+        inputsVisible.value = true
+      break
+
+    case 'back-to-play-step':
+      playlistVisible.value = false
+      openInputs()
+      break
+
+    case 'close-playlist':
+      playlistVisible.value = false
+      break
+
+    case 'clear-playlist-search':
+      playlistSearch.value = ''
+      break
+
+    case 'open-playlist':
+      playlistVisible.value = true
+      closeInputs()
+      break
+
+    case 'reset-playback-speed':
+
+      playbackSpeed.value = 1
+      setPlaybackSpeed(1)
+
+      break
+
+
+    case 'toggle-loop-off':
+
+      if (loopActive.value) {
+        updateSongState('loop')
+      }
+
+      break
+
+
+    case 'toggle-shuffle-off':
+
+      if (shuffleActive.value) {
+        updateSongState('shuffle')
+      }
+
+      break
+
+
+    case 'reset-volume':
+
+      currentVolume.value = 50
+      updateSongState('volume')
+
+      break
+
+
+    case 'reset-mute':
+
+      if (isMuted.value) {
+        toggleMute()
+      }
+
+      break
+  }
+}
+
 const updatePlayer = async (id) => {
   if (player !== undefined) {
     player.destroy()
@@ -609,6 +951,7 @@ const updatePlayer = async (id) => {
           try {
             player.playVideo()
             player.setVolume(currentVolume.value * 2)
+            player.setPlaybackRate(playbackSpeed.value)
             songStateImg.value.src = pauseImg
             timeBarIndicatorStyles.value.left = `0%`
 
@@ -652,24 +995,27 @@ const playPlaylistSong = async (i) => {
   if (!song) return
 
   activeIndex.value = i
-  currIndex = i
+  currIndex.value = i
+  shuffleNextIndex.value = null
 
   const requestId = ++currentRequestId.value
 
   console.log('Playlist song selected:', song)
 
-  let videoId =
-    song.videoId ||
-    song.id ||
-    extractYouTubeVideoId(song.url)
+  let videoId = ''
 
-  if (!videoId && isSpotifyTrackUrl(song.url)) {
+  if (isSpotifyTrackUrl(song.url)) {
     try {
-      console.log('Converting Spotify track to YouTube:', song.url)
+      console.log(
+        'Spotify playlist song detected, converting:',
+        song.url
+      )
 
       const spotifySong = await getSpotifySong(song.url)
 
-      if (currentRequestId.value !== requestId) return
+      if (currentRequestId.value !== requestId) {
+        return
+      }
 
       if (!spotifySong?.videoId) {
         console.error(
@@ -677,13 +1023,16 @@ const playPlaylistSong = async (i) => {
           song
         )
 
-        currentLyricsVal.value = 'YouTube video not found'
+        currentLyricsVal.value =
+          'YouTube video not found'
+
         return
       }
 
       videoId = spotifySong.videoId
 
       song.videoId = videoId
+      song.id = videoId
 
       if (spotifySong.title) {
         song.title = spotifySong.title
@@ -693,8 +1042,11 @@ const playPlaylistSong = async (i) => {
         song.author = spotifySong.artist
       }
 
-      if (spotifySong.duration) {
-        song.duration = spotifySong.duration
+      if (
+        song.duration == null &&
+        spotifySong.duration != null
+      ) {
+        song.duration = Number(spotifySong.duration)
       }
 
     } catch (error) {
@@ -703,9 +1055,17 @@ const playPlaylistSong = async (i) => {
         error
       )
 
-      currentLyricsVal.value = 'Failed to load Spotify song'
+      currentLyricsVal.value =
+        'Failed to load Spotify song'
+
       return
     }
+
+  } else {
+    videoId =
+      song.videoId ||
+      song.id ||
+      extractYouTubeVideoId(song.url)
   }
 
   if (!videoId) {
@@ -714,11 +1074,16 @@ const playPlaylistSong = async (i) => {
       song
     )
 
-    currentLyricsVal.value = 'Unable to play song'
+    currentLyricsVal.value =
+      'Unable to play song'
+
     return
   }
 
-  console.log('Playing YouTube video:', videoId)
+  console.log(
+    'Playing YouTube video:',
+    videoId
+  )
 
   currSong.value =
     song.title || 'Unknown Title'
@@ -729,21 +1094,27 @@ const playPlaylistSong = async (i) => {
   artists = song.author || ''
   words = song.title || ''
 
-  duration = song.duration || undefined
+  duration =
+    song.duration != null
+      ? Number(song.duration)
+      : undefined
 
   clearInterval(checkInterval)
-  clearInterval(timeSliderInterval)
 
   await updatePlayer(videoId)
 
-  if (currentRequestId.value !== requestId) return
+  if (currentRequestId.value !== requestId) {
+    return
+  }
 
   await updateLyrics(
     requestId,
     'playlist'
   )
 
-  if (currentRequestId.value !== requestId) return
+  if (currentRequestId.value !== requestId) {
+    return
+  }
 
   const playlistItem =
     playlistSongsParent.value?.children?.[i]
@@ -758,13 +1129,27 @@ const playPlaylistSong = async (i) => {
 
 const playlistAction = (state, i) => {
   clearInterval(checkInterval)
-  clearInterval(timeSliderInterval)
 
   if (!playlistSongs.value.length) return
 
   if (state === 'next') {
     if (shuffle) {
-      const randomIndex = Math.floor(Math.random() * playlistSongs.value.length)
+      if (shuffleNextIndex.value !== null) {
+        return playPlaylistSong(shuffleNextIndex.value)
+      }
+
+      let randomIndex
+
+      do {
+        randomIndex = Math.floor(
+          Math.random() * playlistSongs.value.length
+        )
+      } while (
+        playlistSongs.value.length > 1 &&
+        randomIndex === currIndex.value
+      )
+
+      shuffleNextIndex.value = randomIndex
 
       return playPlaylistSong(randomIndex)
     }
@@ -780,10 +1165,10 @@ const playlistAction = (state, i) => {
     if (i === undefined) return
     playlistSongs.value.splice(i, 1)
 
-    if (currIndex === i) {
-      currIndex = Math.min(i, playlistSongs.value.length - 1)
-      if (playlistSongs.value[currIndex]) {
-        playPlaylistSong(currIndex)
+    if (currIndex.value === i) {
+      currIndex.value = Math.min(i, playlistSongs.value.length - 1)
+      if (playlistSongs.value[currIndex.value]) {
+        playPlaylistSong(currIndex.value)
       }
     }
 
@@ -800,18 +1185,12 @@ const playlistAction = (state, i) => {
   }
 }
 
-const animateTimeSlider = () => {
-  if (!currentTimeSlider.value) return
-  currentTimeSlider.value.classList.toggle('fade')
-  currentTimeSlider.value.addEventListener('animationend', (e) => currentTimeSlider.value?.classList.remove('fade'))
-}
-
 const updateSongState = (type, e) => {  
   switch (type) {
     case 'state': {
       if (!player) return
 
-      const activePlaylistImg = playlistSongsParent.value?.children?.[currIndex]?.querySelector('.playlist-buttons img')
+      const activePlaylistImg = playlistSongsParent.value?.children?.[currIndex.value]?.querySelector('.playlist-buttons img')
 
       if (player.getPlayerState() === 2) {
         player.playVideo()
@@ -931,6 +1310,36 @@ const updateArrays = () => {
     .trim()
 }
 
+const resetLyricsDisplay = () => {
+  if (!lyrics || !lyricsSynced || lyrics.length === 0) {
+    return
+  }
+
+  const currentTime = player?.getCurrentTime?.() || 0
+
+  let newIndex = -1
+
+  for (let i = 0; i < lyrics.length; i++) {
+    if (currentTime >= Number(lyrics[i].seconds)) {
+      newIndex = i
+    } else {
+      break
+    }
+  }
+
+  currentLyricIndex.value = newIndex
+
+  if (newIndex === -1) {
+    currentLyricsVal.value = ''
+    beforeLyrics.value = []
+    afterLyrics.value = [...lyrics]
+  } else {
+    currentLyricsVal.value = lyrics[newIndex].lyrics
+    beforeLyrics.value = lyrics.slice(0, newIndex)
+    afterLyrics.value = lyrics.slice(newIndex + 1)
+  }
+}
+
 const updateLyrics = async (requestId, type) => {
   isFetchingLyrics.value = true
   currentLyricsVal.value = 'Fetching lyrics...'
@@ -949,7 +1358,7 @@ const updateLyrics = async (requestId, type) => {
     if (currentRequestId.value !== requestId) return
 
     if (type === 'playlist') {
-      const currentSong = playlistSongs.value[currIndex]
+      const currentSong = playlistSongs.value[currIndex.value]
 
       if (!currentSong) {
         console.error('No current playlist song')
@@ -959,12 +1368,18 @@ const updateLyrics = async (requestId, type) => {
       artists = currentSong.author || ''
       words = currentSong.title || ''
 
-      duration = currentSong.duration || undefined
+      if (currentSong.duration) {
+        duration = Number(currentSong.duration)
+      } else if (player && typeof player.getDuration === 'function') {
+        duration = Math.round(player.getDuration() || 0)
+      } else {
+        duration = 0
+      }
 
       console.log('Lyrics search:', {
         artist: artists,
         song: words,
-        duration
+        duration: Math.round(Number(duration) || 0)
       })
     }
 
@@ -989,15 +1404,15 @@ const updateLyrics = async (requestId, type) => {
         currSong.value = songName || song.value || 'Unknown Title'
         currArtist.value = artistName || artist.value || 'Unknown Artist'
       } else {
-        currSong.value = playlistSongs.value[currIndex]?.title || ''
-        currArtist.value = playlistSongs.value[currIndex]?.author || ''
+        currSong.value = playlistSongs.value[currIndex.value]?.title || ''
+        currArtist.value = playlistSongs.value[currIndex.value]?.author || ''
       }
 
       if (type === 'single' && songUrlInput.value) {
         const id = songUrlInput.value.split('=')[1]
         if (id) {
           playlistSongs.value.push({url: id, title: currSong.value, author: currArtist.value, duration: duration})
-          currIndex = playlistSongs.value.length - 1
+          currIndex.value = playlistSongs.value.length - 1
         }
       }
     } else {
@@ -1007,6 +1422,8 @@ const updateLyrics = async (requestId, type) => {
         lyrics = response.lyrics
 
         lyricsSynced = response.synced === true
+
+        resetLyricsDisplay()
 
         if (response.fallback !== true) {
           currArtist.value = response.artist
@@ -1027,96 +1444,84 @@ const updateLyrics = async (requestId, type) => {
             duration: response.duration
           })
 
-          currIndex = playlistSongs.value.length - 1
-          activeIndex.value = currIndex
+          currIndex.value = playlistSongs.value.length - 1
+          activeIndex.value = currIndex.value
         }
       }
     }
-
-    if (timeSliderInterval) {
-      clearInterval(timeSliderInterval)
-      timeSliderInterval = null
-    }
-
-    timeSliderInterval = setInterval(() => {
-      if (currentTimeSlider.value) {
-        currentTimeSlider.value.style.left = `${(Math.round(player.getCurrentTime()) / Math.round(player.getDuration())) * 100}%`
-      }
-      animateTimeSlider()
-    }, 3000)
           
     checkInterval = setInterval(() => {
+      if (!player || typeof player.getCurrentTime !== 'function') return
+
       try {
-        currTime.value = Math.round(player.getCurrentTime())
-        roundedPlayerFullTime = Math.round(player.getDuration())
+        currTime.value = Math.round(player.getCurrentTime() || 0)
+        roundedPlayerFullTime = Math.round(player.getDuration() || 0)
 
         songTime.value = `${currTime.value} / ${roundedPlayerFullTime}`
-        progressPercent.value = (player.getCurrentTime() / player.getDuration()) * 100
-        
+
+        progressPercent.value =
+          roundedPlayerFullTime > 0
+            ? (currTime.value / roundedPlayerFullTime) * 100
+            : 0
       } catch (e) {
-        songTime.value = `Loading`
+        songTime.value = 'Loading'
+        return
       }
 
       if (lyrics === undefined) {
         currentLyricsVal.value = 'No Lyrics Found'
-      } else if (!lyricsSynced) {
-    
-        if (beforeLyrics.value.length === 0 && afterLyrics.value.length === 0) {
-          currentLyricsVal.value = ''
+      }
 
-          afterLyrics.value = [...lyrics]
-        }
-
-      } else {
-
+      else if (!lyricsSynced) {
         if (
-          lyrics.length > 0 &&
-          currTime.value < Math.round(lyrics[0].seconds) &&
+          beforeLyrics.value.length === 0 &&
           afterLyrics.value.length === 0
         ) {
           currentLyricsVal.value = ''
+          afterLyrics.value = [...lyrics]
+        }
+      }
 
-          for (let i4 = 0; i4 < lyrics.length; i4++) {
-            afterLyrics.value.push(lyrics[i4])
+      else if (lyrics.length > 0) {
+        let newIndex = -1
+
+        for (let i = 0; i < lyrics.length; i++) {
+          if (currTime.value >= Number(lyrics[i].seconds)) {
+            newIndex = i
+          } else {
+            break
           }
         }
 
-        let previousCurrentLyrics
+        if (newIndex !== currentLyricIndex.value) {
+          currentLyricIndex.value = newIndex
 
-        lyrics.forEach((lyric, i) => {
-          if (player.getPlayerState() !== 2) {
-            if (
-              parseInt(lyric.seconds).toFixed(1) ===
-              player.getCurrentTime().toFixed(1) &&
-              previousCurrentLyrics !== lyric.seconds
-            ) {
-              previousCurrentLyrics = lyric.seconds
+          if (newIndex === -1) {
+            currentLyricsVal.value = ''
+            beforeLyrics.value = []
+            afterLyrics.value = [...lyrics]
+          } else {
+            currentLyricsVal.value = lyrics[newIndex].lyrics
 
-              currentLyricsVal.value = lyric.lyrics
+            beforeLyrics.value = lyrics.slice(0, newIndex)
 
-              afterLyrics.value = []
-              beforeLyrics.value = []
+            afterLyrics.value = lyrics.slice(newIndex + 1)
 
-              if (i !== 0) {
-                for (let i2 = 0; i2 < i; i2++) {
-                  beforeLyrics.value.push(lyrics[i2])
-                }
-              }
-
-              for (let i3 = i + 1; i3 < lyrics.length; i3++) {
-                afterLyrics.value.push(lyrics[i3])
-              }
-
+            if (autoScroll.value) {
               currentLyrics.value?.scrollIntoView({
                 behavior: 'smooth',
                 block: 'center'
               })
             }
           }
-        })
+        }
       }
 
-      if (currTime.value >= roundedPlayerFullTime - 1 && !isSwitchingSong) {
+      if (
+        roundedPlayerFullTime > 0 &&
+        currTime.value >= roundedPlayerFullTime - 1 &&
+        !isSwitchingSong
+      ) {
         isSwitchingSong = true
 
         if (loop === true) {
@@ -1147,12 +1552,13 @@ const updateLyrics = async (requestId, type) => {
               Math.random() * playlistSongs.value.length
             )
 
-            if (playlistSongs.value.length > 1) {
-              while (randomIndex === currIndex) {
-                randomIndex = Math.floor(
-                  Math.random() * playlistSongs.value.length
-                )
-              }
+            while (
+              playlistSongs.value.length > 1 &&
+              randomIndex === currIndex.value
+            ) {
+              randomIndex = Math.floor(
+                Math.random() * playlistSongs.value.length
+              )
             }
 
             playPlaylistSong(randomIndex)
@@ -1165,7 +1571,7 @@ const updateLyrics = async (requestId, type) => {
           isSwitchingSong = false
         }, 1000)
       }
-    },100)
+    }, 100)
   } catch (e) {
     isFetchingLyrics.value = false
     console.log(e)
@@ -1229,7 +1635,7 @@ const handleInput = async (type, queue) => {
         )
 
       const endpoint = isSpotify
-        ? '/api/playlist'
+        ? '/api/spotify-playlist'
         : '/api/playlist'
 
       const response = await axios.post(endpoint, {
@@ -1399,7 +1805,6 @@ const handleInput = async (type, queue) => {
       return
     }
 
-    clearInterval(timeSliderInterval)
     clearInterval(checkInterval)
 
     const requestId =
@@ -1413,7 +1818,7 @@ const handleInput = async (type, queue) => {
 
     if (playlistIndex !== -1) {
       activeIndex.value = playlistIndex
-      currIndex = playlistIndex
+      currIndex.value = playlistIndex
     } else {
       activeIndex.value = null
     }
@@ -1433,140 +1838,98 @@ const handleInput = async (type, queue) => {
   }
 
   if (urlType === 'spotify') {
-
-    console.log(
-      'Fetching Spotify metadata...'
-    )
+    console.log('Fetching Spotify → YouTube metadata...')
 
     let spotifySong
 
     try {
-      spotifySong =
-        await getSpotifySong(inputUrl)
+      spotifySong = await getSpotifySong(inputUrl)
     } catch (e) {
-      console.error(
-        'Spotify request failed:',
-        e
-      )
-
-      currentLyricsVal.value =
-        'Failed to load Spotify song'
-
+      console.error('Spotify request failed:', e)
+      currentLyricsVal.value = 'Failed to load Spotify song'
       return
     }
 
-    if (!spotifySong) {
-      console.log(
-        'No Spotify song returned'
-      )
+    if (!spotifySong?.videoId) {
+      console.error('No YouTube video found:', spotifySong)
+      currentLyricsVal.value = 'YouTube video not found'
       return
     }
 
-    console.log(
-      'Spotify → YouTube:',
-      spotifySong
-    )
+    artists = spotifySong.artist || ''
+    words = spotifySong.title || ''
 
-    if (!spotifySong.videoId) {
-      console.log(
-        'No YouTube video found'
-      )
+    artistName = artists
+    songName = words
 
-      currentLyricsVal.value =
-        'YouTube video not found'
+    currArtist.value = artists || 'Unknown Artist'
+    currSong.value = words || 'Unknown Title'
 
-      return
-    }
+    updateApiUrl()
 
-    artists =
-      spotifySong.artist || ''
-
-    words =
-      spotifySong.title || ''
-
-    artistName =
-      artists
-
-    songName =
-      words
-
-    currArtist.value =
-      artists || 'Unknown Artist'
-
-    currSong.value =
-      words || 'Unknown Title'
-
-    // ---------------------------------
-    // Update lyrics API URL
-    // ---------------------------------
-
-    if (artists && words) {
-      updateApiUrl()
-    } else {
-      apiUrl = ''
-    }
-
-    toggleInputsVisible()
-
-    // ---------------------------------
-    // Queue Spotify song
-    // ---------------------------------
+    const videoId = spotifySong.videoId
 
     if (queue === true) {
       playlistSongs.value.push({
-        url: spotifySong.videoId,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        videoId,
+        id: videoId,
         title: words || 'Unknown Title',
         author: artists || 'Unknown Artist',
         duration: spotifySong.duration || null
       })
 
-      console.log(
-        'Spotify → YouTube song added to queue:',
-        {
-          videoId: spotifySong.videoId,
-          title: words,
-          artist: artists
-        }
-      )
+      console.log('Spotify → YouTube added to queue:', {
+        videoId,
+        title: words,
+        artist: artists
+      })
 
       return
     }
 
-    clearInterval(timeSliderInterval)
+    toggleInputsVisible()
     clearInterval(checkInterval)
 
-   const requestId =
-        ++currentRequestId.value
+    const requestId = ++currentRequestId.value
 
     const playlistIndex = findPlaylistSongIndex(
-      spotifySong.videoId,
-      spotifySong.title,
-      spotifySong.artist
+      videoId,
+      words,
+      artists
     )
 
     if (playlistIndex !== -1) {
       activeIndex.value = playlistIndex
-      currIndex = playlistIndex
+      currIndex.value = playlistIndex
     } else {
       activeIndex.value = null
     }
 
-    await updatePlayer(
-      spotifySong.videoId
-    )
+    await updatePlayer(videoId)
 
-    if (
-      currentRequestId.value === requestId
-    ) {
-      await updateLyrics(
-        requestId,
-        'single'
-      )
+    if (currentRequestId.value === requestId) {
+      await updateLyrics(requestId, 'single')
     }
 
     return
   }
 }
+
+onMounted(() => {
+  setTimeout(() => {
+    const guideCompleted =
+      localStorage.getItem(
+        'interactiveGuideCompleted'
+      )
+
+    if (guideCompleted !== 'true') {
+
+      showGuidePrompt.value = true
+
+    }
+  }, 400);
+});
 
 </script>
 
@@ -1574,8 +1937,16 @@ const handleInput = async (type, queue) => {
   <main>
     <h1>Song Lyrics (BETA VERSION, MADE BY: SHLEV)</h1>
 
-    <div id="inputwrapper" ref="inputWrapper">
-      <button
+     <button
+      v-if="!playlistVisible"
+      class="theme-button"
+      @click="toggleDarkMode"
+      :title="darkMode ? 'Switch to light mode' : 'Switch to dark mode'"
+      >   {{ darkMode ? '☀' : '☾' }}
+    </button>
+
+     <button
+        v-if="!playlistVisible"
         id="inputsToggleBtn"
         type="button"
         class="toggle-input-button"
@@ -1586,11 +1957,14 @@ const handleInput = async (type, queue) => {
         <span class="toggle-icon">{{ inputsVisible ? '✕' : '➤' }}</span>
         <span class="toggle-label">{{ inputsVisible ? 'Close inputs' : 'Show inputs' }}</span>
       </button>
+
+    <div id="inputwrapper" ref="inputWrapper" :class="{ 'inputs-closed': !inputsVisible }">
+    
       <div id="startui" v-show="inputsVisible">
 
         <div id="inputselector">
-          <select v-model="selectedInput" @change="updateInputs">
-            <option value="Single">Single</option>
+          <select v-model="selectedInput" @change="updateInputs" id="input-selector">
+            <option value="Single">Song</option>
             <option value="Playlist">Playlist</option>
           </select>
         </div>
@@ -1604,7 +1978,7 @@ const handleInput = async (type, queue) => {
             </div>
 
             <div id="buttonsdiv">
-              <button type="submit" class="submit" @click.prevent="handleInput('single')">Play</button>
+              <button id="guidePlayButton" type="submit" class="submit" @click.prevent="handleInput('single')"> Play </button>
               <button type="submit" class="submit" @click.prevent="handleInput('single', true)">Add to Queue</button>
             </div>
           </form>
@@ -1620,20 +1994,42 @@ const handleInput = async (type, queue) => {
         </div>
       </div>
 
-      <div class="playlist-toggle" @click="togglePlaylistVisible">☰</div>
+      <button
+        class="playlist-toggle"
+        @click="togglePlaylistVisible"
+        title="Up Next"
+      >
+        ☰
+      </button>
 
       <div v-if="playlistVisible" class="playlist-backdrop" @click="togglePlaylistVisible"></div>
 
       <div class="playlist-panel" :class="{ open: playlistVisible }">
 
         <div class="playlist-header">
-          <p>Playlist</p>
+         <div class="up-next-info">
+            <p class="queue-heading">Up Next</p>
+
+            <div v-if="nextSong" class="next-song">
+              <span class="next-song-title">
+                {{ nextSong.title }}
+              </span>
+
+              <span class="next-song-artist">
+                {{ nextSong.author }}
+              </span>
+            </div>
+
+            <span v-else class="next-song">
+              Nothing queued
+            </span>
+          </div>
 
           <input
             v-model="playlistSearch"
             type="text"
             class="playlist-search"
-            placeholder="Search songs or artists..."
+            placeholder="Search queue..."
           />
         </div>
 
@@ -1653,12 +2049,12 @@ const handleInput = async (type, queue) => {
 
             <div class="playlist-buttons">
 
-              <img
-                  :src="item.originalIndex === activeIndex ? pauseImg : playImg"
-                  class="playlist-icon"
-                  @click="playPlaylistSong(item.originalIndex)"
-                  id="playplaylistsong"
-                />
+              <img 
+                :src="item.originalIndex === activeIndex ? pauseImg : playImg"
+                class="playlist-icon"
+                :class="{ 'guide-play-button': item.song.isGuideSong }"
+                @click="playPlaylistSong(item.originalIndex)"
+              />
 
               <img src="../assets/remove.png" class="playlist-icon" @click="playlistAction('remove', item.originalIndex)" />
 
@@ -1675,17 +2071,52 @@ const handleInput = async (type, queue) => {
         <div id="songEmbed" ref="songEmbed" v-show="false"></div>
       
         <div id="lyrics">
-           <div v-if="lyrics && !lyricsSynced" class="unsynced-lyrics-box">
-              <div class="unsynced-lyrics-title">
-                Unsynced Lyrics
+          <button
+            class="auto-scroll-button"
+            :class="{ active: autoScroll }"
+            @click="toggleAutoScroll"
+          >
+            {{ autoScroll ? 'Auto-scroll: ON' : 'Auto-scroll: OFF' }}
+          </button>
+
+           <div
+              v-if="lyrics && !lyricsSynced"
+              class="unsynced-lyrics-box"
+            >
+              <div>
+                <strong class="unsynced-lyrics-title">Unsynced lyrics</strong>
               </div>
             </div>
           <div id="previouslyrics" class="lyricsdiv">
-            <p class="lyric" v-for="(lyric, i) in beforeLyrics" :key="i">{{ lyric.lyrics }}</p>
+            <p
+              v-for="(lyric, i) in beforeLyrics"
+              :key="'before-' + i"
+              class="lyric clickable-lyric"
+              :class="{ 'lyric-disabled': !lyricsSynced }"
+              @click="lyricsSynced && seekToLyric(lyric)"
+            >
+              {{ lyric.lyrics }}
+            </p>
           </div>
-          <p id="currentlyrics" ref="currentLyrics" class="lyric">{{ currentLyricsVal }}</p>
+
+          <p
+            id="currentlyrics"
+            ref="currentLyrics"
+            class="lyric current-lyric"
+          >
+            {{ currentLyricsVal }}
+          </p>
+
           <div id="afterlyrics" class="lyricsdiv">
-            <p class="lyric" v-for="lyric in afterLyrics">{{ lyric.lyrics }}</p>
+            <p
+              v-for="(lyric, i) in afterLyrics"
+              :key="'after-' + i"
+              class="lyric clickable-lyric"
+              :class="{ 'lyric-disabled': !lyricsSynced }"
+              @click="lyricsSynced && seekToLyric(lyric)"
+            >
+              {{ lyric.lyrics }}
+            </p>
           </div>
         </div>
       </div>
@@ -1740,6 +2171,7 @@ const handleInput = async (type, queue) => {
       <div id="newrightsection">
 
         <img
+          id="guideLoopButton"
           src="../assets/loop.png"
           @click="updateSongState('loop')"
           class="newcontrolimage"
@@ -1747,14 +2179,33 @@ const handleInput = async (type, queue) => {
         />
 
         <img
+          id="guideShuffleButton"
           src="../assets/shuffle.png"
           @click="updateSongState('shuffle')"
           class="newcontrolimage"
           :class="{ inactive: !shuffleActive }"
         />
 
+        <!-- Playback speed -->
+        <div class="speed-control">
+          <select
+            v-model.number="playbackSpeed"
+            @change="setPlaybackSpeed(playbackSpeed)"
+            title="Playback speed"
+          >
+            <option
+              v-for="speed in playbackSpeeds"
+              :key="speed"
+              :value="speed"
+            >
+              {{ speed }}×
+            </option>
+          </select>
+        </div>
+
         <div id="newvolumediv">
           <img
+            id="guideMuteButton"
             :src="isMuted ? mutedImg : volumeImg"
             class="newcontrolimage"
             @click="toggleMute"
@@ -1775,5 +2226,68 @@ const handleInput = async (type, queue) => {
 
     </div>
   </div>
+
+  <div
+
+    v-if="showGuidePrompt"
+
+    class="guide-prompt-overlay"
+
+  >
+
+    <div class="guide-prompt">
+
+      <h2>Welcome!</h2>
+
+      <p>
+
+        Would you like to take a quick interactive guide?
+
+        It will show you how to use the different
+
+        features of this page.
+
+      </p>
+
+      <div class="guide-prompt-buttons">
+
+        <button
+
+          class="guide-prompt-skip"
+
+          @click="skipGuide"
+
+        >
+
+          No thanks
+
+        </button>
+
+        <button
+
+          class="guide-prompt-start"
+
+          @click="startGuide"
+
+        >
+
+          Start guide
+
+        </button>
+
+      </div>
+
+    </div>
+
+  </div>
+
+  <InteractiveGuide
+
+    v-if="showInteractiveGuide"
+      @undo-action="handleGuideUndo"
+      @close="closeInteractiveGuide"
+      @finished="closeInteractiveGuide"
+  />
+  
   </main>
 </template>

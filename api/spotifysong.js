@@ -15,6 +15,10 @@ async function getYouTube() {
 }
 
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+
   if (req.method !== 'POST') {
     return res.status(405).json({
       error: 'Method not allowed'
@@ -89,7 +93,8 @@ export default async function handler(req, res) {
     return res.json({
       artist,
       title,
-      videoId: video.id
+      videoId: video.id,
+      url: `https://www.youtube.com/watch?v=${video.id}`
     })
   } catch (error) {
     console.error('Spotify → YouTube error:', error)
