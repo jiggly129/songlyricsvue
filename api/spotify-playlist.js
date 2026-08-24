@@ -1,5 +1,6 @@
 import axios from 'axios'
-import { chromium } from 'playwright'
+import { chromium as playwright } from 'playwright-core'
+import chromium from '@sparticuz/chromium'
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -21,7 +22,9 @@ export default async function handler(req, res) {
   let browser
 
   try {
-    browser = await chromium.launch({
+    browser = await playwright.launch({
+      args: chromium.args,
+      executablePath: await chromium.executablePath(),
       headless: true
     })
 
